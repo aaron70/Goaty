@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestError_NewError(t *testing.T) {
@@ -13,70 +16,42 @@ func TestError_NewError(t *testing.T) {
 	err := NewError(sentinel, cause, "something went wrong: %d", 42)
 
 	var e *Error
-	if !errors.As(err, &e) {
-		t.Fatal("expected *Error type")
-	}
+	require.ErrorAs(t, err, &e, "expected *Error type")
 
-	if e.Sentinel != sentinel {
-		t.Errorf("Sentinel = %v, want %v", e.Sentinel, sentinel)
-	}
-	if e.Cause != cause {
-		t.Errorf("Cause = %v, want %v", e.Cause, cause)
-	}
-	if e.Message != "something went wrong: 42" {
-		t.Errorf("Message = %q, want %q", e.Message, "something went wrong: 42")
-	}
+	assert.Equal(t, sentinel, e.Sentinel)
+	assert.Equal(t, cause, e.Cause)
+	assert.Equal(t, "something went wrong: 42", e.Message)
 }
 
 func TestError_NewError_NilSentinelAndCause(t *testing.T) {
 	err := NewError(nil, nil, "only message")
 
 	var e *Error
-	if !errors.As(err, &e) {
-		t.Fatal("expected *Error type")
-	}
+	require.ErrorAs(t, err, &e, "expected *Error type")
 
-	if e.Sentinel != nil {
-		t.Errorf("Sentinel = %v, want nil", e.Sentinel)
-	}
-	if e.Cause != nil {
-		t.Errorf("Cause = %v, want nil", e.Cause)
-	}
-	if e.Message != "only message" {
-		t.Errorf("Message = %q, want %q", e.Message, "only message")
-	}
+	assert.Nil(t, e.Sentinel)
+	assert.Nil(t, e.Cause)
+	assert.Equal(t, "only message", e.Message)
 }
 
 func TestError_New(t *testing.T) {
 	err := New("simple error: %d", 1)
 
 	var e *Error
-	if !errors.As(err, &e) {
-		t.Fatal("expected *Error type")
-	}
+	require.ErrorAs(t, err, &e, "expected *Error type")
 
-	if e.Sentinel != nil {
-		t.Errorf("Sentinel = %v, want nil", e.Sentinel)
-	}
-	if e.Cause != nil {
-		t.Errorf("Cause = %v, want nil", e.Cause)
-	}
-	if e.Message != "simple error: 1" {
-		t.Errorf("Message = %q, want %q", e.Message, "simple error: 1")
-	}
+	assert.Nil(t, e.Sentinel)
+	assert.Nil(t, e.Cause)
+	assert.Equal(t, "simple error: 1", e.Message)
 }
 
 func TestError_New_NoArgs(t *testing.T) {
 	err := New("no args")
 
 	var e *Error
-	if !errors.As(err, &e) {
-		t.Fatal("expected *Error type")
-	}
+	require.ErrorAs(t, err, &e, "expected *Error type")
 
-	if e.Message != "no args" {
-		t.Errorf("Message = %q, want %q", e.Message, "no args")
-	}
+	assert.Equal(t, "no args", e.Message)
 }
 
 func TestError_Wrap(t *testing.T) {
@@ -85,32 +60,20 @@ func TestError_Wrap(t *testing.T) {
 	err := Wrap(sentinel, cause)
 
 	var e *Error
-	if !errors.As(err, &e) {
-		t.Fatal("expected *Error type")
-	}
+	require.ErrorAs(t, err, &e, "expected *Error type")
 
-	if e.Sentinel != sentinel {
-		t.Errorf("Sentinel = %v, want %v", e.Sentinel, sentinel)
-	}
-	if e.Cause != cause {
-		t.Errorf("Cause = %v, want %v", e.Cause, cause)
-	}
-	if e.Message != "" {
-		t.Errorf("Message = %q, want empty", e.Message)
-	}
+	assert.Equal(t, sentinel, e.Sentinel)
+	assert.Equal(t, cause, e.Cause)
+	assert.Empty(t, e.Message)
 }
 
 func TestError_Wrap_NilCause(t *testing.T) {
 	err := Wrap(io.EOF, nil)
 
 	var e *Error
-	if !errors.As(err, &e) {
-		t.Fatal("expected *Error type")
-	}
+	require.ErrorAs(t, err, &e, "expected *Error type")
 
-	if e.Cause != nil {
-		t.Errorf("Cause = %v, want nil", e.Cause)
-	}
+	assert.Nil(t, e.Cause)
 }
 
 func TestError_ErrorFormat(t *testing.T) {
@@ -181,9 +144,7 @@ func TestError_ErrorFormat(t *testing.T) {
 				Message:  tt.message,
 				Cause:    tt.cause,
 			}
-			if got := e.Error(); got != tt.want {
-				t.Errorf("Error() = %q, want %q", got, tt.want)
-			}
+			assert.Equal(t, tt.want, e.Error())
 		})
 	}
 }
@@ -192,37 +153,31 @@ func TestError_Unwrap_ReturnsCause(t *testing.T) {
 	cause := io.EOF
 	e := Error{Cause: cause}
 
-	if got := e.Unwrap(); got != cause {
-		t.Errorf("Unwrap() = %v, want %v", got, cause)
-	}
+	assert.Equal(t, cause, e.Unwrap())
 }
 
 func TestError_Unwrap_NilCause(t *testing.T) {
 	e := Error{}
-	if got := e.Unwrap(); got != nil {
-		t.Errorf("Unwrap() = %v, want nil", got)
-	}
+
+	assert.Nil(t, e.Unwrap())
 }
 
 func TestError_Is_NonErrorTargetViaSentinel(t *testing.T) {
 	e := Error{Sentinel: io.EOF, Cause: io.ErrClosedPipe}
-	if !errors.Is(&e, io.EOF) {
-		t.Error("expected Is(io.EOF) to match via Sentinel")
-	}
+
+	assert.True(t, errors.Is(&e, io.EOF), "expected errors.Is(io.EOF) to match via Sentinel")
 }
 
 func TestError_Is_NonErrorTargetViaCause(t *testing.T) {
 	e := Error{Sentinel: io.EOF, Cause: io.ErrClosedPipe}
-	if !errors.Is(&e, io.ErrClosedPipe) {
-		t.Error("expected Is(io.ErrClosedPipe) to match via Cause")
-	}
+
+	assert.True(t, errors.Is(&e, io.ErrClosedPipe), "expected errors.Is(io.ErrClosedPipe) to match via Cause")
 }
 
 func TestError_Is_NonErrorTargetNoMatch(t *testing.T) {
 	e := Error{Sentinel: io.EOF, Cause: io.ErrClosedPipe}
-	if errors.Is(&e, io.ErrNoProgress) {
-		t.Error("expected Is(io.ErrNoProgress) to be false")
-	}
+
+	assert.False(t, errors.Is(&e, io.ErrNoProgress), "expected errors.Is(io.ErrNoProgress) to be false")
 }
 
 func TestError_Is_WithWrappedCauseChain(t *testing.T) {
@@ -231,18 +186,14 @@ func TestError_Is_WithWrappedCauseChain(t *testing.T) {
 
 	e := Error{Cause: middle}
 
-	if !errors.Is(&e, io.EOF) {
-		t.Error("expected Is(io.EOF) to traverse cause chain")
-	}
+	assert.True(t, errors.Is(&e, io.EOF), "expected errors.Is(io.EOF) to traverse cause chain")
 }
 
 func TestError_Is_ErrorTargetMatchingSentinels(t *testing.T) {
 	e1 := &Error{Sentinel: io.EOF, Cause: io.ErrClosedPipe}
 	e2 := &Error{Sentinel: io.EOF, Cause: io.ErrNoProgress}
 
-	if !errors.Is(e1, e2) {
-		t.Error("expected *Error with matching Sentinels to be equal")
-	}
+	assert.True(t, errors.Is(e1, e2), "expected *Error with matching Sentinels to be equal")
 }
 
 func TestError_Is_ErrorTargetMatchingCauses(t *testing.T) {
@@ -250,56 +201,39 @@ func TestError_Is_ErrorTargetMatchingCauses(t *testing.T) {
 	e1 := &Error{Sentinel: io.ErrClosedPipe, Cause: cause}
 	e2 := &Error{Sentinel: io.ErrNoProgress, Cause: cause}
 
-	if !errors.Is(e1, e2) {
-		t.Error("expected *Error with matching Causes to be equal")
-	}
+	assert.True(t, errors.Is(e1, e2), "expected *Error with matching Causes to be equal")
 }
 
 func TestError_Is_ErrorTargetNoMatch(t *testing.T) {
 	e1 := &Error{Sentinel: io.EOF, Cause: io.ErrClosedPipe}
 	e2 := &Error{Sentinel: io.ErrNoProgress, Cause: io.EOF}
 
-	if errors.Is(e1, e2) {
-		t.Error("expected *Error with no matching Sentinel or Cause to not match (NOTE: may expose bug where e.Cause is compared to itself)")
-	}
+	assert.False(t, errors.Is(e1, e2), "expected *Error with no matching Sentinel or Cause to not match")
 }
 
 func TestError_Is_BothEmpty(t *testing.T) {
 	e1 := &Error{}
 	e2 := &Error{}
 
-	if !errors.Is(e1, e2) {
-		t.Error("expected two empty *Error to match")
-	}
+	assert.True(t, errors.Is(e1, e2), "expected two empty *Error to match")
 }
 
 func TestPanicRecoveredError_String(t *testing.T) {
-	if PanicRecoveredError.Error() != "PanicRecovered" {
-		t.Errorf("PanicRecoveredError.Error() = %q, want %q", PanicRecoveredError.Error(), "PanicRecovered")
-	}
+	assert.Equal(t, "PanicRecovered", PanicRecoveredError.Error())
 }
 
 func TestPanicRecoveredError_Identity(t *testing.T) {
-	if !errors.Is(PanicRecoveredError, PanicRecoveredError) {
-		t.Error("expected PanicRecoveredError to match itself")
-	}
+	assert.True(t, errors.Is(PanicRecoveredError, PanicRecoveredError), "expected PanicRecoveredError to match itself")
 }
 
 func TestWrap_PanicRecoveredError(t *testing.T) {
 	err := Wrap(PanicRecoveredError, io.EOF)
 
-	if !errors.Is(err, PanicRecoveredError) {
-		t.Error("expected Wrap(PanicRecoveredError, io.EOF) to match PanicRecoveredError")
-	}
-
-	if !errors.Is(err, io.EOF) {
-		t.Error("expected Wrap(PanicRecoveredError, io.EOF) to match io.EOF via Cause")
-	}
+	assert.True(t, errors.Is(err, PanicRecoveredError), "expected Wrap(PanicRecoveredError, io.EOF) to match PanicRecoveredError")
+	assert.True(t, errors.Is(err, io.EOF), "expected Wrap(PanicRecoveredError, io.EOF) to match io.EOF via Cause")
 }
 
 func TestError_Is_NilReceiver(t *testing.T) {
 	var e *Error
-	if e != nil {
-		t.Fatal("expected nil receiver")
-	}
+	assert.Nil(t, e)
 }

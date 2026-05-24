@@ -1,6 +1,10 @@
 package validations
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestStrIsBlank(t *testing.T) {
 	tests := []struct {
@@ -27,9 +31,7 @@ func TestStrIsBlank(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := StrIsBlank(tt.input); got != tt.want {
-				t.Errorf("StrIsBlank(%q) = %v, want %v", tt.input, got, tt.want)
-			}
+			assert.Equal(t, tt.want, StrIsBlank(tt.input))
 		})
 	}
 }
