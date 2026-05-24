@@ -1,7 +1,12 @@
 package validations
 
-import "strings"
+import "unicode"
 
 func StrIsBlank(str string) bool {
-	return strings.Trim(str, " ") == ""
+	for _, r := range str {
+		if !unicode.IsSpace(r) {
+			return false
+		}
+	}
+	return true
 } 
