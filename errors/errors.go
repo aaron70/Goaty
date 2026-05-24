@@ -15,10 +15,10 @@ type Error struct {
 }
 
 func NewError(sentinel error, cause error, msg string, args ...any) error {
-	return Error{
+	return &Error{
 		Sentinel: sentinel,
-		Cause: cause,
-		Message: fmt.Sprintf(msg, args...),
+		Cause:    cause,
+		Message:  fmt.Sprintf(msg, args...),
 	}
 }
 
@@ -63,5 +63,5 @@ func (e *Error) Is(target error) bool {
     if !ok {
         return errors.Is(e.Sentinel, target) || errors.Is(e.Cause, target)
     }
-    return errors.Is(e.Sentinel, t.Sentinel) || errors.Is(e.Cause, e.Cause)
+    return errors.Is(e.Sentinel, t.Sentinel) || errors.Is(e.Cause, t.Cause)
 }
