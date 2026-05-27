@@ -10,7 +10,7 @@ import (
 func Send[T any](ctx context.Context, ch chan<- T, value T) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = errors.Wrap(errors.PanicRecoveredError, fmt.Errorf("%+v", r))
+			err = errors.Wrap(errors.ErrPanicRecovered, fmt.Errorf("%+v", r))
 		}
 	}()
 	select {

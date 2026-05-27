@@ -3,5 +3,7 @@ package errors
 import "errors"
 
 var (
-	PanicRecoveredError error = errors.New("PanicRecovered")
+	ErrPanicRecovered error = errors.New("PanicRecovered")
+	ErrNotFound       error = errors.New("NotFound")
+	ErrConflict       error = errors.New("Conflict")
 )

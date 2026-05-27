@@ -37,7 +37,7 @@ func TestSend(t *testing.T) {
 		ch := make(chan string, 1)
 		close(ch)
 		err := Send(t.Context(), ch, "hello")
-		require.ErrorIs(t, err, goatyerrors.PanicRecoveredError)
+		require.ErrorIs(t, err, goatyerrors.ErrPanicRecovered)
 
 		var e *goatyerrors.Error
 		if assert.ErrorAs(t, err, &e) {
