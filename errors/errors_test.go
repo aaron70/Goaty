@@ -219,17 +219,17 @@ func TestError_Is_BothEmpty(t *testing.T) {
 }
 
 func TestPanicRecoveredError_String(t *testing.T) {
-	assert.Equal(t, "PanicRecovered", PanicRecoveredError.Error())
+	assert.Equal(t, "PanicRecovered", ErrPanicRecovered.Error())
 }
 
 func TestPanicRecoveredError_Identity(t *testing.T) {
-	assert.True(t, errors.Is(PanicRecoveredError, PanicRecoveredError), "expected PanicRecoveredError to match itself")
+	assert.True(t, errors.Is(ErrPanicRecovered, ErrPanicRecovered), "expected PanicRecoveredError to match itself")
 }
 
 func TestWrap_PanicRecoveredError(t *testing.T) {
-	err := Wrap(PanicRecoveredError, io.EOF)
+	err := Wrap(ErrPanicRecovered, io.EOF)
 
-	assert.True(t, errors.Is(err, PanicRecoveredError), "expected Wrap(PanicRecoveredError, io.EOF) to match PanicRecoveredError")
+	assert.True(t, errors.Is(err, ErrPanicRecovered), "expected Wrap(PanicRecoveredError, io.EOF) to match PanicRecoveredError")
 	assert.True(t, errors.Is(err, io.EOF), "expected Wrap(PanicRecoveredError, io.EOF) to match io.EOF via Cause")
 }
 
