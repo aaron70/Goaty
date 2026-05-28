@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 
 	"github.com/aaron70/goaty/errors"
+	"github.com/aaron70/goaty/validations"
 )
 
 type FS[I comparable, E any] struct {
+	FileExt   string
 	rootDir   string
 	marshal   func(E) ([]byte, error)
 	unmarshal func([]byte) (E, error)
@@ -28,7 +30,7 @@ func defaultUnmarshal[E any](data []byte) (E, error) {
 }
 
 func NewFSRepository[I comparable, E any](rootDir string) (*FS[I, E], error) {
-	return NewFSRepositoryWithSerializer[I,](rootDir, defaultMarshal[E], defaultUnmarshal[E])
+	return NewFSRepositoryWithSerializer[I](rootDir, defaultMarshal[E], defaultUnmarshal[E])
 }
 
 func NewFSRepositoryWithSerializer[I comparable, E any](
@@ -48,7 +50,10 @@ func NewFSRepositoryWithSerializer[I comparable, E any](
 }
 
 func (r *FS[I, E]) filePath(id I) string {
-	return filepath.Join(r.rootDir, fmt.Sprintf("%v.json", id))
+	if validations.StrIsBlank(r.FileExt) {
+		return filepath.Join(r.rootDir, fmt.Sprintf("%v", id))
+	}
+	return filepath.Join(r.rootDir, fmt.Sprintf("%v.%s", id, r.FileExt))
 }
 
 func (r *FS[I, E]) fileExists(path string) (bool, error) {
@@ -148,7 +153,12 @@ func (r *FS[I, E]) GetAll() ([]E, error) {
 		if entry.IsDir() {
 			continue
 		}
-		if filepath.Ext(entry.Name()) != ".json" {
+		ext := filepath.Ext(entry.Name())
+		if !validations.StrIsBlank(r.FileExt) {
+			if ext != fmt.Sprintf(".%s", r.FileExt) {
+				continue
+			}
+		} else if !validations.StrIsBlank(ext) {
 			continue
 		}
 
