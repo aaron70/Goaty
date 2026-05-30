@@ -1,0 +1,225 @@
+package concurrency
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/aaron70/goaty/channels"
+	"github.com/google/uuid"
+)
+
+type EventType string
+
+const (
+	taskEnqueued    = "TASK_ENQUEUED"
+	taskConsumed    = "TASK_CONSUMED"
+	taskDone        = "TASK_DONE"
+	taskFailed      = "TASK_FAILED"
+	taskQueueClosed = "TASK_QUEUE_CLOSED"
+)
+
+var (
+	zeroEvent event
+
+	TASK_ENQUEUED_EVENT     = event{Type: taskEnqueued}
+	TASK_CONSUMED_EVENT     = event{Type: taskConsumed}
+	TASK_DONE_EVENT         = event{Type: taskDone}
+	TASK_FAILED_EVENT       = event{Type: taskFailed}
+	TASK_QUEUE_CLOSED_EVENT = event{Type: taskQueueClosed}
+)
+
+type event struct {
+	Type EventType
+}
+
+type WorkerFuncResult[T, R any] func(ctx context.Context, task T) (R, error)
+
+type PoolResult[T, R any] struct {
+	MinWorkers   int
+	MaxWorkers   int
+	BufferSize   int
+	IdleDuration time.Duration
+
+	ctx  context.Context
+	work WorkerFuncResult[T, R]
+
+	tasks   chan T
+	results chan R
+	errors  chan error
+	events  chan event
+	tasksQueueDone chan struct{}
+
+	taskProducers atomic.Int64
+	tasksEnqueued atomic.Int64
+	tasksConsumed atomic.Int64
+	tasksFailed   atomic.Int64
+	tasksDone     atomic.Int64
+
+	aliveWorkers atomic.Int64
+
+
+	wg sync.WaitGroup
+}
+
+func NewPoolResult[T, R any](ctx context.Context, work WorkerFuncResult[T, R]) (*PoolResult[T, R], error) {
+	p := &PoolResult[T, R]{
+		MinWorkers: 0,
+		MaxWorkers: 25,
+		BufferSize: 1,
+
+		ctx:  ctx,
+		work: work,
+	}
+
+	return p, nil
+}
+
+func (p *PoolResult[T, R]) tryCreateGoroutine(worker func(ctx context.Context, id string) func()) bool {
+	for {
+		aliveWorkers := p.aliveWorkers.Load()
+		if aliveWorkers >= int64(p.MaxWorkers) {
+			return false
+		}
+		if p.aliveWorkers.CompareAndSwap(aliveWorkers, aliveWorkers+1) {
+			id := uuid.NewString()
+			p.wg.Go(worker(p.ctx, id))
+			return true
+		}
+	}
+}
+
+func (p *PoolResult[T, R]) submitWorker(work WorkerFuncResult[T, R]) bool {
+	return p.tryCreateGoroutine(func(ctx context.Context, id string) func() {
+		return func() {
+			fmt.Printf("Worker %s stared...\n", id)
+			defer fmt.Printf("Worker %s finished...\n", id)
+			defer p.aliveWorkers.Add(-1)
+			timer := time.NewTimer(p.IdleDuration)
+			done := true
+			for {
+				select {
+				case <-ctx.Done():
+					fmt.Printf("[Worker %s]: Context done\n", id)
+					err := ctx.Err()
+					if err != nil {
+						_ = channels.Send(p.ctx, p.errors, err)
+					}
+					return
+
+				case task, open := <-p.tasks:
+					fmt.Printf("[Worker %s]: Task: %v, Open: %t\n", id, task, open)
+					done = false
+					if !open {
+						return
+					}
+					channels.Send(p.ctx, p.events, TASK_CONSUMED_EVENT)
+					res, err := work(p.ctx, task)
+					if err != nil {
+						channels.Send(p.ctx, p.events, TASK_FAILED_EVENT)
+						channels.Send(ctx, p.errors, err)
+					} else {
+						err := channels.Send(ctx, p.results, res)
+						if err != nil {
+							channels.Send(p.ctx, p.events, TASK_FAILED_EVENT)
+							channels.Send(ctx, p.errors, err)
+						}
+						channels.Send(p.ctx, p.events, TASK_DONE_EVENT)
+					}
+					done = true
+					timer.Reset(p.IdleDuration)
+				case <-timer.C:
+					if !done {
+						continue
+					}
+					timer.Stop()
+					return
+				}
+			}
+		}
+	})
+}
+
+func (p *PoolResult[T, R]) monitor() {
+	fmt.Println("Monitor has been started...")
+	defer fmt.Println("Monitor has been finished...")
+	for {
+		event, open, err := channels.Recv(p.ctx, p.events)
+		fmt.Printf("Event: %+v, Open: %t, Err: %s\n", event, open, err)
+		if err != nil || (!open && event == zeroEvent) {
+			return
+		}
+
+		switch event.Type {
+		case taskEnqueued:
+			p.tasksEnqueued.Add(1)
+			p.submitWorker(p.work)
+		case taskConsumed:
+			p.tasksEnqueued.Add(-1)
+			p.tasksConsumed.Add(1)
+		case taskDone:
+			p.tasksConsumed.Add(-1)
+			p.tasksDone.Add(1)
+		case taskQueueClosed:
+			fmt.Printf("Task queue closed. Workers: %d\n", p.aliveWorkers.Load())
+			if p.aliveWorkers.Load() <= 0 {
+				return
+			}
+		}
+
+		fmt.Printf("Tasks Enqueued: %d\n", p.tasksEnqueued.Load())
+		fmt.Printf("Tasks Consumed: %d\n", p.tasksConsumed.Load())
+		fmt.Printf("Tasks Done: %d\n", p.tasksDone.Load())
+	}
+}
+
+func (p *PoolResult[T, R]) init() {
+	if p.tasks == nil {
+		p.tasks = make(chan T, p.BufferSize)
+		p.tasksQueueDone = make(chan struct{}, p.BufferSize)
+		p.results = make(chan R, p.BufferSize)
+		p.errors = make(chan error, p.BufferSize)
+		p.events = make(chan event, max(p.BufferSize, 100))
+		p.wg.Go(p.monitor)
+	}
+}
+
+func (p *PoolResult[T, R]) Close() {
+	if p.tasks != nil {
+		channels.Send(p.ctx, p.events, TASK_QUEUE_CLOSED_EVENT)
+		close(p.tasks)
+		close(p.tasksQueueDone)
+	}
+}
+
+func (p *PoolResult[T, R]) RecvTasks(tasks <-chan T) error {
+	p.init()
+
+	for {
+		task, open, err := channels.Recv(p.ctx, tasks)
+		if err != nil {
+			return err
+		}
+		if !open {
+			break
+		}
+		channels.Send(p.ctx, p.events, TASK_ENQUEUED_EVENT)
+		err = channels.Send(p.ctx, p.tasks, task)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (p *PoolResult[T, R]) Wait() {
+	if p.tasksQueueDone != nil {
+		for range p.tasksQueueDone {
+		}
+	}
+	p.wg.Wait()
+	close(p.events)
+}

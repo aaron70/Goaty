@@ -14,7 +14,7 @@ func Send[T any](ctx context.Context, ch chan<- T, value T) (err error) {
 		}
 	}()
 	select {
-	case <- ctx.Done():
+	case <-ctx.Done():
 		return ctx.Err()
 	case ch <- value:
 		return nil
@@ -24,9 +24,9 @@ func Send[T any](ctx context.Context, ch chan<- T, value T) (err error) {
 func Recv[T any](ctx context.Context, ch <-chan T) (T, bool, error) {
 	var zero T
 	select {
-	case <- ctx.Done():
+	case <-ctx.Done():
 		return zero, false, ctx.Err()
-	case value, open := <- ch:
+	case value, open := <-ch:
 		return value, open, nil
 	}
 }
