@@ -13,7 +13,7 @@ import (
 
 func TestNewPool(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
-		pool, err := NewPool[string, any](t.Context())
+		pool, err := NewPool[string](t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, 25, pool.MaxWorkers)
 		assert.Equal(t, 0, pool.BufferSize)
@@ -22,9 +22,9 @@ func TestNewPool(t *testing.T) {
 
 	t.Run("with options", func(t *testing.T) {
 		pool, err := NewPool(t.Context(),
-			NewPoolWithMaxWorkers[string, any](10),
-			NewPoolWithBufferSize[string, any](5),
-			NewPoolWithIdleDuration[string, any](time.Minute),
+			NewPoolWithMaxWorkers[string](10),
+			NewPoolWithBufferSize[string](5),
+			NewPoolWithIdleDuration[string](time.Minute),
 		)
 		require.NoError(t, err)
 		assert.Equal(t, 10, pool.MaxWorkers)
@@ -35,7 +35,7 @@ func TestNewPool(t *testing.T) {
 
 func TestPushTasks(t *testing.T) {
 	t.Run("closed input channel", func(t *testing.T) {
-		pool, err := NewPool[string, any](t.Context())
+		pool, err := NewPool[string](t.Context())
 		require.NoError(t, err)
 
 		ch := make(chan string)
@@ -48,7 +48,7 @@ func TestPushTasks(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		pool, err := NewPool[string, any](ctx)
+		pool, err := NewPool[string](ctx)
 		require.NoError(t, err)
 
 		ch := make(chan string)
@@ -58,8 +58,8 @@ func TestPushTasks(t *testing.T) {
 
 	t.Run("processes tasks", func(t *testing.T) {
 		pool, err := NewPool(t.Context(),
-			NewPoolWithMaxWorkers[string, any](3),
-			NewPoolWithBufferSize[string, any](3),
+			NewPoolWithMaxWorkers[string](3),
+			NewPoolWithBufferSize[string](3),
 		)
 		require.NoError(t, err)
 
@@ -87,9 +87,9 @@ func TestPushTasks(t *testing.T) {
 
 func TestIdleTimeout(t *testing.T) {
 	pool, err := NewPool(t.Context(),
-		NewPoolWithMaxWorkers[string, any](1),
-		NewPoolWithIdleDuration[string, any](10*time.Millisecond),
-		NewPoolWithBufferSize[string, any](1),
+		NewPoolWithMaxWorkers[string](1),
+		NewPoolWithIdleDuration[string](10*time.Millisecond),
+		NewPoolWithBufferSize[string](1),
 	)
 	require.NoError(t, err)
 
@@ -117,7 +117,7 @@ func TestIdleTimeout(t *testing.T) {
 
 func TestWait(t *testing.T) {
 	pool, err := NewPool(t.Context(),
-		NewPoolWithBufferSize[string, any](3),
+		NewPoolWithBufferSize[string](3),
 	)
 	require.NoError(t, err)
 

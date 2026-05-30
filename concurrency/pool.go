@@ -12,13 +12,12 @@ import (
 
 type WorkerFunc[T any] func(context.Context, T)
 
-type Pool[T, R any] struct {
+type Pool[T any] struct {
 	MaxWorkers   int
 	BufferSize   int
 	IdleDuration time.Duration
 
 	queue     chan T
-	results   chan R
 	errors    chan error
 	queueDone chan struct{}
 
@@ -27,10 +26,10 @@ type Pool[T, R any] struct {
 	aliveWorkers atomic.Int32
 }
 
-type newPoolOption[T, R any] func(*Pool[T, R]) error
+type newPoolOption[T any] func(*Pool[T]) error
 
-func NewPool[T, R any](ctx context.Context, options ...newPoolOption[T, R]) (*Pool[T, R], error) {
-	pool := &Pool[T, R]{
+func NewPool[T any](ctx context.Context, options ...newPoolOption[T]) (*Pool[T], error) {
+	pool := &Pool[T]{
 		MaxWorkers:   25,
 		BufferSize:   0,
 		IdleDuration: time.Second * 3,
@@ -45,34 +44,33 @@ func NewPool[T, R any](ctx context.Context, options ...newPoolOption[T, R]) (*Po
 	}
 
 	pool.queue = make(chan T, pool.BufferSize)
-	pool.results = make(chan R, pool.BufferSize)
 	pool.errors = make(chan error, pool.BufferSize)
 
 	return pool, nil
 }
 
-func NewPoolWithMaxWorkers[T, R any](maxWorkers int) newPoolOption[T, R] {
-	return func(p *Pool[T, R]) error {
+func NewPoolWithMaxWorkers[T any](maxWorkers int) newPoolOption[T] {
+	return func(p *Pool[T]) error {
 		p.MaxWorkers = maxWorkers
 		return nil
 	}
 }
 
-func NewPoolWithIdleDuration[T, R any](idleDuration time.Duration) newPoolOption[T, R] {
-	return func(p *Pool[T, R]) error {
+func NewPoolWithIdleDuration[T any](idleDuration time.Duration) newPoolOption[T] {
+	return func(p *Pool[T]) error {
 		p.IdleDuration = idleDuration
 		return nil
 	}
 }
 
-func NewPoolWithBufferSize[T, R any](bufferSize int) newPoolOption[T, R] {
-	return func(p *Pool[T, R]) error {
+func NewPoolWithBufferSize[T any](bufferSize int) newPoolOption[T] {
+	return func(p *Pool[T]) error {
 		p.BufferSize = bufferSize
 		return nil
 	}
 }
 
-func (p *Pool[T, R]) tryCreateGoroutine(worker func(ctx context.Context, id string) func()) bool {
+func (p *Pool[T]) tryCreateGoroutine(worker func(ctx context.Context, id string) func()) bool {
 	for {
 		aliveWorkers := p.aliveWorkers.Load()
 		if aliveWorkers >= int32(p.MaxWorkers) {
@@ -86,7 +84,7 @@ func (p *Pool[T, R]) tryCreateGoroutine(worker func(ctx context.Context, id stri
 	}
 }
 
-func (p *Pool[T, R]) submitWorker(worker WorkerFunc[T]) bool {
+func (p *Pool[T]) submitWorker(worker WorkerFunc[T]) bool {
 	return p.tryCreateGoroutine(func(ctx context.Context, id string) func() {
 		return func() {
 			defer p.aliveWorkers.Add(-1)
@@ -121,7 +119,7 @@ func (p *Pool[T, R]) submitWorker(worker WorkerFunc[T]) bool {
 	})
 }
 
-func (p *Pool[T, R]) PushTasks(tasks <-chan T, worker WorkerFunc[T]) error {
+func (p *Pool[T]) PushTasks(tasks <-chan T, worker WorkerFunc[T]) error {
 	p.queueDone = make(chan struct{}, 1)
 	defer func() {
 		close(p.queue)
@@ -144,7 +142,7 @@ func (p *Pool[T, R]) PushTasks(tasks <-chan T, worker WorkerFunc[T]) error {
 	}
 }
 
-func (p *Pool[T, R]) Wait() {
+func (p *Pool[T]) Wait() {
 	for range p.queueDone {}
 	p.workers.Wait()
 }
