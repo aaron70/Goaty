@@ -17,10 +17,10 @@ type Pool[T, R any] struct {
 	BufferSize   int
 	IdleDuration time.Duration
 
-	queue       chan T
-	results     chan R
-	errors      chan error
-	queueClosed bool
+	queue     chan T
+	results   chan R
+	errors    chan error
+	queueDone chan struct{}
 
 	ctx          context.Context
 	workers      sync.WaitGroup
@@ -32,7 +32,7 @@ type newPoolOption[T, R any] func(*Pool[T, R]) error
 func NewPool[T, R any](ctx context.Context, options ...newPoolOption[T, R]) (*Pool[T, R], error) {
 	pool := &Pool[T, R]{
 		MaxWorkers:   25,
-		BufferSize: 0,
+		BufferSize:   0,
 		IdleDuration: time.Second * 3,
 
 		ctx: ctx,
@@ -122,10 +122,10 @@ func (p *Pool[T, R]) submitWorker(worker WorkerFunc[T]) bool {
 }
 
 func (p *Pool[T, R]) PushTasks(tasks <-chan T, worker WorkerFunc[T]) error {
-	p.queueClosed = false
+	p.queueDone = make(chan struct{}, 1)
 	defer func() {
 		close(p.queue)
-		p.queueClosed = true
+		close(p.queueDone)
 	}()
 	for {
 		task, open, err := channels.Recv(p.ctx, tasks)
@@ -145,7 +145,6 @@ func (p *Pool[T, R]) PushTasks(tasks <-chan T, worker WorkerFunc[T]) error {
 }
 
 func (p *Pool[T, R]) Wait() {
-	for !p.queueClosed {
-	}
+	for range p.queueDone {}
 	p.workers.Wait()
 }

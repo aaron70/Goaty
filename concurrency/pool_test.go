@@ -42,7 +42,6 @@ func TestPushTasks(t *testing.T) {
 		close(ch)
 		err = pool.PushTasks(ch, func(ctx context.Context, task string) {})
 		assert.NoError(t, err)
-		assert.True(t, pool.queueClosed)
 	})
 
 	t.Run("cancelled context", func(t *testing.T) {
@@ -55,7 +54,6 @@ func TestPushTasks(t *testing.T) {
 		ch := make(chan string)
 		err = pool.PushTasks(ch, func(ctx context.Context, task string) {})
 		assert.ErrorIs(t, err, context.Canceled)
-		assert.True(t, pool.queueClosed)
 	})
 
 	t.Run("processes tasks", func(t *testing.T) {
