@@ -3,6 +3,7 @@ package concurrency
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -144,6 +145,9 @@ func NewPoolResultWithMaxWorkers(maxWorkers int) poolResultOption {
 		if maxWorkers <= 0 {
 			return errors.NewError(errors.ErrInvalidArgument, nil, "maxWorkers must be a number greater than 0")
 		}
+		if maxWorkers < prc.MinWorkers {
+			return errors.NewError(errors.ErrInvalidArgument, nil, "maxWorkers must be greater or equals than the minWorkers (%d)", prc.MinWorkers)
+		}
 		prc.MaxWorkers = maxWorkers
 		return nil
 	}
@@ -154,7 +158,10 @@ func NewPoolResultWithMinWorkers(minWorkers int) poolResultOption {
 		if minWorkers <= 0 {
 			return errors.NewError(errors.ErrInvalidArgument, nil, "minWorkers must be a number greater than 0")
 		}
-		prc.MaxWorkers = minWorkers
+		if minWorkers > prc.MaxWorkers {
+			return errors.NewError(errors.ErrInvalidArgument, nil, "minWorkers must be less or equals than the maxWorkers (%d)", prc.MaxWorkers)
+		}
+		prc.MinWorkers = minWorkers
 		return nil
 	}
 }
@@ -199,7 +206,7 @@ func NewPoolResult[T, R any](ctx context.Context, work WorkerFuncResult[T, R], o
 
 	config := &poolResultConfig{
 		MinWorkers:   0,
-		MaxWorkers:   25,
+		MaxWorkers:   math.MaxInt,
 		BufferSize:   0,
 		IdleDuration: time.Second,
 		KeepAlive:    false,
@@ -306,8 +313,12 @@ func (p *PoolResult[T, R]) monitor() {
 		close(p.errors)
 	}()
 
-	ticker := time.NewTicker(time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond * 100)
 	defer ticker.Stop()
+
+	for range max(p.MinWorkers-int(p.workersAlive.Load()), 0) {
+		p.submitWorker(p.work)
+	}
 
 lifecycle:
 	for {
@@ -315,6 +326,9 @@ lifecycle:
 		case <-p.ctx.Done():
 			return
 		case <-ticker.C:
+			for range max(p.MinWorkers-int(p.workersAlive.Load()), 0) {
+				p.submitWorker(p.work)
+			}
 			if p.tasksEnqueued.Load() > 0 && p.workersIdle.Load() <= 0 {
 				p.submitWorker(p.work)
 			}
@@ -433,7 +447,7 @@ func (p *PoolResult[T, R]) RecvTasks(tasks <-chan T) error {
 func (p *PoolResult[T, R]) tryCreateGoroutine(worker func(ctx context.Context, id string) func()) bool {
 	for {
 		aliveWorkers := p.workersAlive.Load()
-		if aliveWorkers >= int64(p.MaxWorkers) {
+		if aliveWorkers >= int64(p.MaxWorkers) || (p.isQueueClosed() && p.tasksEnqueued.Load() <= 0) {
 			return false
 		}
 		if p.workersAlive.CompareAndSwap(aliveWorkers, aliveWorkers+1) {
@@ -506,8 +520,10 @@ func (p *PoolResult[T, R]) submitWorker(work WorkerFuncResult[T, R]) bool {
 					}
 					timer.Stop()
 
-					channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerIdleState, currState: workerDoneState}))
-					break lifecycle
+					if p.workersAlive.Load() > int64(p.MinWorkers) {
+						channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerIdleState, currState: workerDoneState}))
+						break lifecycle
+					}
 				}
 			}
 		}
