@@ -36,19 +36,20 @@ func printMetrics[T, R any](pool *concurrency.PoolResult[T, R]) {
 }
 
 func main() {
+	start := time.Now()
 	// defer fmt.Println("Program Finished...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 
 	var wg sync.WaitGroup
 
-	n := 70
+	n := 700
 	tasks := make(chan int, n)
 
 	pool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, task int) (int, error) {
 		// fmt.Printf("Working on task: %d\n", task)
-		time.Sleep(time.Millisecond * 1500)
+		// time.Sleep(time.Millisecond * 1500)
 		return task, nil
 	}))
 
@@ -56,7 +57,7 @@ func main() {
 		printMetrics(pool)
 		for {
 			select {
-			case <-time.Tick(time.Millisecond * 100):
+			case <-time.Tick(time.Millisecond):
 				printMetrics(pool)
 				if pool.IsDone() {
 					return
@@ -68,9 +69,15 @@ func main() {
 	})
 
 	wg.Go(func() {
+		res, errs := pool.ResultsErr()
+		channels.Drain(ctx, res)
+		channels.Drain(ctx, errs)
+	})
+
+	wg.Go(func() {
 		for i := range n {
 			tasks <- i
-			time.Sleep(time.Millisecond * 100)
+			// time.Sleep(time.Millisecond * 100)
 		}
 		close(tasks)
 	})
@@ -80,9 +87,8 @@ func main() {
 
 	// utils.LogDefaultErr(pool.Wait())
 
-	res, errs := pool.ResultsErr()
-	channels.Drain(ctx, res)
-	channels.Drain(ctx, errs)
 
+	// fmt.Println("Waiting for main goroutines")
 	wg.Wait()
+	fmt.Printf("Time elapsed: %s\n", time.Since(start))
 }
