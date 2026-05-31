@@ -116,8 +116,8 @@ func NewPoolResult[T, R any](ctx context.Context, work WorkerFuncResult[T, R]) (
 		return nil, errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "The work function can't be nil, the work function provides the ability to workers to process the tasks.")
 	}
 
-	maxWorkers := 3 
-	bufferSize := 1000
+	maxWorkers := 150
+	bufferSize := 700 
 	idleDuration := time.Second
 	keepAlive := true
 
@@ -208,11 +208,13 @@ func (p *PoolResult[T, R]) IsDone() bool {
 }
 
 func (p *PoolResult[T, R]) monitor() {
-	// fmt.Println("Monitor has started...")
-	// defer fmt.Println("Monitor has exited...")
 	defer close(p.monitorDone)
-	defer close(p.results)
-	defer close(p.errors)
+	defer close(p.events)
+	defer func() {
+		p.workers.Wait()
+		close(p.results)
+		close(p.errors)
+	}()
 
 lifecycle:
 	for {
@@ -253,6 +255,9 @@ lifecycle:
 			prev := event.Data[prevState].(workerState)
 			curr := event.Data[currState].(workerState)
 			switch prev {
+			case workerCreatedState: // no-op
+			case workerDoneState: // Shouldn't happen, DONE is a final state
+			case workerFailedState: // Shouldn't happen, FAILED is a final state
 			case workerRunningState:
 				p.workersRunning.Add(-1)
 			case workerIdleState:
@@ -266,9 +271,15 @@ lifecycle:
 			case workerDoneState:
 				p.workersDone.Add(1)
 				p.workersAlive.Add(-1)
+				if p.IsDone() {
+					break lifecycle
+				}
 			case workerFailedState:
-				p.workersIdle.Add(1)
+				p.workersFailed.Add(1)
 				p.workersAlive.Add(-1)
+				if p.IsDone() {
+					break lifecycle
+				}
 			}
 		}
 	}
@@ -288,11 +299,11 @@ func (p *PoolResult[T, R]) RecvTasks(tasks <-chan T) error {
 			break
 		}
 
-		channels.Send(p.ctx, p.events, newEvent(taskEnqueued))
 		err = channels.Send(p.ctx, p.queue, task)
 		if err != nil {
 			return errors.NewError(nil, err, "Could not enqueue the task")
 		}
+		channels.Send(p.ctx, p.events, newEvent(taskEnqueued))
 	}
 
 	return nil
@@ -316,9 +327,6 @@ func (p *PoolResult[T, R]) tryCreateGoroutine(worker func(ctx context.Context, i
 func (p *PoolResult[T, R]) submitWorker(work WorkerFuncResult[T, R]) bool {
 	return p.tryCreateGoroutine(func(ctx context.Context, id string) func() {
 		return func() {
-			// fmt.Printf("Worker %s stared...\n", id)
-			// defer fmt.Printf("Worker %s finished...\n", id)
-			// defer channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{ prevState: }))
 			defer func() {
 				if r := recover(); r != nil {
 					channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerRunningState, currState: workerFailedState}))
@@ -348,7 +356,6 @@ func (p *PoolResult[T, R]) submitWorker(work WorkerFuncResult[T, R]) bool {
 				case task, open := <-p.queue:
 					done = false
 					if !open {
-						// fmt.Printf("[Worker %s]: Queue is closed!\n", id)
 						channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerIdleState, currState: workerDoneState}))
 						break lifecycle
 					}
@@ -367,6 +374,9 @@ func (p *PoolResult[T, R]) submitWorker(work WorkerFuncResult[T, R]) bool {
 						channels.Send(p.ctx, p.events, newEvent(taskDone))
 					}
 					done = true
+					if !timer.Stop() {
+						<-timer.C
+					}
 					timer.Reset(p.IdleDuration)
 					channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerRunningState, currState: workerIdleState}))
 				case <-timer.C:
