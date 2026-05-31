@@ -78,7 +78,6 @@ type WorkerFuncResult[T, R any] func(ctx context.Context, task T) (R, error)
 
 type PoolResult[T, R any] struct {
 	MaxWorkers   int
-	BufferSize   int
 	IdleDuration time.Duration
 	KeepAlive    bool
 
@@ -102,12 +101,61 @@ type PoolResult[T, R any] struct {
 	workersIdle    atomic.Int64
 	workersDone    atomic.Int64
 	workersFailed  atomic.Int64
+	eventsHandled  atomic.Int64
 
 	workers   sync.WaitGroup
 	closeOnce sync.Once
 }
 
-func NewPoolResult[T, R any](ctx context.Context, work WorkerFuncResult[T, R]) (*PoolResult[T, R], error) {
+type poolResultOption func(*poolResultConfig) error
+
+type poolResultConfig struct {
+	MaxWorkers   int
+	BufferSize   int
+	IdleDuration time.Duration
+	KeepAlive    bool
+}
+
+func NewPoolResultWithMaxWorkers(maxWorkers int) poolResultOption {
+	return func(prc *poolResultConfig) error {
+		if maxWorkers <= 0 {
+			return errors.NewError(errors.ErrInvalidArgument, nil, "maxWorkers must be a number greater than 0")
+		}
+		prc.MaxWorkers = maxWorkers
+		return nil
+	}
+}
+
+func NewPoolResultWithBufferSize(bufferSize int) poolResultOption {
+	return func(prc *poolResultConfig) error {
+		if bufferSize < 0 {
+			return errors.NewError(errors.ErrInvalidArgument, nil, "bufferSize must be 0 or a positive number")
+		}
+		prc.BufferSize = bufferSize
+		return nil
+	}
+}
+
+// The idle duration should be greater than the duration that takes each record to be produced, to avoid creating a worker for each record.
+func NewPoolResultWithIdleDuration(idleDuration time.Duration) poolResultOption {
+	return func(prc *poolResultConfig) error {
+		minIdleDuration := time.Millisecond
+		if idleDuration < minIdleDuration {
+			return errors.NewError(errors.ErrInvalidArgument, nil, "idleDuration must be greater than %s. Although %s is the minimum duration is not recommended to use too low values as the idle timer could trigger before the job could read the task, leaving the task in the queue forever.", minIdleDuration, minIdleDuration)
+		}
+		prc.IdleDuration = idleDuration
+		return nil
+	}
+}
+
+func NewPoolResultWithKeepAlive(KeepAlive bool) poolResultOption {
+	return func(prc *poolResultConfig) error {
+		prc.KeepAlive = KeepAlive
+		return nil
+	}
+}
+
+func NewPoolResult[T, R any](ctx context.Context, work WorkerFuncResult[T, R], options ...poolResultOption) (*PoolResult[T, R], error) {
 	if ctx == nil {
 		return nil, errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "Context should not be nil, please use content.Background() or similar if no need a context.")
 	}
@@ -116,26 +164,33 @@ func NewPoolResult[T, R any](ctx context.Context, work WorkerFuncResult[T, R]) (
 		return nil, errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "The work function can't be nil, the work function provides the ability to workers to process the tasks.")
 	}
 
-	maxWorkers := 150
-	bufferSize := 700 
-	idleDuration := time.Second
-	keepAlive := true
+	config := &poolResultConfig{
+		MaxWorkers:   25,
+		BufferSize:   0,
+		IdleDuration: time.Second,
+		KeepAlive:    false,
+	}
+
+	for _, option := range options {
+		if err := option(config); err != nil {
+			return nil, err
+		}
+	}
 
 	pool := &PoolResult[T, R]{
-		MaxWorkers:   maxWorkers,
-		BufferSize:   bufferSize,
-		IdleDuration: idleDuration,
-		KeepAlive:    keepAlive,
+		MaxWorkers:   config.MaxWorkers,
+		IdleDuration: config.IdleDuration,
+		KeepAlive:    config.KeepAlive,
 
 		ctx:  ctx,
 		work: work,
 
 		queueDone:   make(chan struct{}, 1),
-		queue:       make(chan T, bufferSize),
-		results:     make(chan R, bufferSize),
-		errors:      make(chan error, bufferSize),
+		queue:       make(chan T, config.BufferSize),
+		results:     make(chan R, config.BufferSize),
+		errors:      make(chan error, config.BufferSize),
 		monitorDone: make(chan struct{}, 1),
-		events:      make(chan event, max(bufferSize+maxWorkers, 100)),
+		events:      make(chan event, config.BufferSize),
 	}
 
 	go pool.monitor()
@@ -216,69 +271,78 @@ func (p *PoolResult[T, R]) monitor() {
 		close(p.errors)
 	}()
 
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
 lifecycle:
 	for {
-		event, open, err := channels.Recv(p.ctx, p.events)
-		if err != nil {
+		select {
+		case <-p.ctx.Done():
 			return
-		}
-		if !open {
-			break
-		}
-
-		switch event.Type {
-		case taskEnqueued:
-			p.tasksEnqueued.Add(1)
-			if p.workersIdle.Load() <= 0 {
+		case <-ticker.C:
+			if p.tasksEnqueued.Load() > 0 && p.workersIdle.Load() <= 0 {
 				p.submitWorker(p.work)
 			}
-		case taskConsumed:
-			p.tasksEnqueued.Add(-1)
-			p.tasksConsumed.Add(1)
-		case taskDone:
-			p.tasksConsumed.Add(-1)
-			p.tasksDone.Add(1)
-			if p.IsDone() {
-				break lifecycle
+		case event, open := <-p.events:
+			if !open {
+				break
 			}
-		case taskFailed:
-			p.tasksConsumed.Add(-1)
-			p.tasksFailed.Add(1)
-			if p.IsDone() {
-				break lifecycle
-			}
-		case taskQueueClosed:
-			if p.IsDone() {
-				break lifecycle
-			}
-		case workerStateChanged:
-			prev := event.Data[prevState].(workerState)
-			curr := event.Data[currState].(workerState)
-			switch prev {
-			case workerCreatedState: // no-op
-			case workerDoneState: // Shouldn't happen, DONE is a final state
-			case workerFailedState: // Shouldn't happen, FAILED is a final state
-			case workerRunningState:
-				p.workersRunning.Add(-1)
-			case workerIdleState:
-				p.workersIdle.Add(-1)
-			}
-			switch curr {
-			case workerRunningState:
-				p.workersRunning.Add(1)
-			case workerIdleState:
-				p.workersIdle.Add(1)
-			case workerDoneState:
-				p.workersDone.Add(1)
-				p.workersAlive.Add(-1)
+			p.eventsHandled.Add(1)
+
+			switch event.Type {
+			case taskEnqueued:
+				p.tasksEnqueued.Add(1)
+				if p.workersIdle.Load() <= 0 {
+					p.submitWorker(p.work)
+				}
+			case taskConsumed:
+				p.tasksEnqueued.Add(-1)
+				p.tasksConsumed.Add(1)
+			case taskDone:
+				p.tasksConsumed.Add(-1)
+				p.tasksDone.Add(1)
 				if p.IsDone() {
 					break lifecycle
 				}
-			case workerFailedState:
-				p.workersFailed.Add(1)
-				p.workersAlive.Add(-1)
+			case taskFailed:
+				p.tasksConsumed.Add(-1)
+				p.tasksFailed.Add(1)
 				if p.IsDone() {
 					break lifecycle
+				}
+			case taskQueueClosed:
+				if p.IsDone() {
+					break lifecycle
+				}
+			case workerStateChanged:
+				prev := event.Data[prevState].(workerState)
+				curr := event.Data[currState].(workerState)
+				switch prev {
+				case workerCreatedState: // no-op
+				case workerDoneState: // Shouldn't happen, DONE is a final state
+				case workerFailedState: // Shouldn't happen, FAILED is a final state
+				case workerRunningState:
+					p.workersRunning.Add(-1)
+				case workerIdleState:
+					p.workersIdle.Add(-1)
+				}
+				switch curr {
+				case workerRunningState:
+					p.workersRunning.Add(1)
+				case workerIdleState:
+					p.workersIdle.Add(1)
+				case workerDoneState:
+					p.workersDone.Add(1)
+					p.workersAlive.Add(-1)
+					if p.IsDone() {
+						break lifecycle
+					}
+				case workerFailedState:
+					p.workersFailed.Add(1)
+					p.workersAlive.Add(-1)
+					if p.IsDone() {
+						break lifecycle
+					}
 				}
 			}
 		}
@@ -299,11 +363,11 @@ func (p *PoolResult[T, R]) RecvTasks(tasks <-chan T) error {
 			break
 		}
 
+		channels.Send(p.ctx, p.events, newEvent(taskEnqueued))
 		err = channels.Send(p.ctx, p.queue, task)
 		if err != nil {
 			return errors.NewError(nil, err, "Could not enqueue the task")
 		}
-		channels.Send(p.ctx, p.events, newEvent(taskEnqueued))
 	}
 
 	return nil
