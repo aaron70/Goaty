@@ -39,22 +39,29 @@ func main() {
 	start := time.Now()
 	// defer fmt.Println("Program Finished...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 
 	var wg sync.WaitGroup
 
-	n := 700
+	n := 1000
 	tasks := make(chan int, n)
 
-	pool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, task int) (int, error) {
+	work := func(ctx context.Context, task int) (int, error) {
 		// fmt.Printf("Working on task: %d\n", task)
-		// time.Sleep(time.Millisecond * 1500)
+		time.Sleep(time.Millisecond * 100)
 		return task, nil
-	}))
+	}
+
+	pool := utils.Must(concurrency.NewPoolResult(ctx, work,
+		concurrency.NewPoolResultWithBufferSize(0),
+		concurrency.NewPoolResultWithMaxWorkers(100),
+		// concurrency.NewPoolResultWithIdleDuration(time.Millisecond),
+	))
 
 	wg.Go(func() {
 		printMetrics(pool)
+		defer printMetrics(pool)
 		for {
 			select {
 			case <-time.Tick(time.Millisecond):
@@ -77,7 +84,7 @@ func main() {
 	wg.Go(func() {
 		for i := range n {
 			tasks <- i
-			// time.Sleep(time.Millisecond * 100)
+			// time.Sleep(time.Millisecond * 20)
 		}
 		close(tasks)
 	})
@@ -86,7 +93,6 @@ func main() {
 	pool.Close()
 
 	// utils.LogDefaultErr(pool.Wait())
-
 
 	// fmt.Println("Waiting for main goroutines")
 	wg.Wait()
