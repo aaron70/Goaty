@@ -2,6 +2,7 @@ package concurrency
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,6 +61,13 @@ type TasksMetrics struct {
 	Failed   int64
 }
 
+func (m TasksMetrics) String() string {
+	return fmt.Sprintf(`	Enqueued: %d
+	Consumed: %d
+	Done: %d
+	Failed: %d`, m.Enqueued, m.Consumed, m.Done, m.Failed)
+}
+
 type WorkersMetrics struct {
 	Alive   int64
 	Created int64
@@ -69,15 +77,29 @@ type WorkersMetrics struct {
 	Failed  int64
 }
 
+func (m WorkersMetrics) String() string {
+	return fmt.Sprintf(`	Created: %d
+	Alive: %d
+	Running: %d
+	Idle: %d
+	Done: %d
+	Failed: %d`, m.Created, m.Alive, m.Running, m.Idle, m.Done, m.Failed)
+}
+
 type Metrics struct {
 	Tasks   TasksMetrics
 	Workers WorkersMetrics
+}
+
+func (m Metrics) String() string {
+	return fmt.Sprintf("Task:\n%s\nWorkers:\n%s", m.Workers, m.Tasks)
 }
 
 type WorkerFuncResult[T, R any] func(ctx context.Context, task T) (R, error)
 
 type PoolResult[T, R any] struct {
 	MaxWorkers   int
+	MinWorkers   int
 	IdleDuration time.Duration
 	KeepAlive    bool
 
@@ -111,6 +133,7 @@ type poolResultOption func(*poolResultConfig) error
 
 type poolResultConfig struct {
 	MaxWorkers   int
+	MinWorkers   int
 	BufferSize   int
 	IdleDuration time.Duration
 	KeepAlive    bool
@@ -122,6 +145,16 @@ func NewPoolResultWithMaxWorkers(maxWorkers int) poolResultOption {
 			return errors.NewError(errors.ErrInvalidArgument, nil, "maxWorkers must be a number greater than 0")
 		}
 		prc.MaxWorkers = maxWorkers
+		return nil
+	}
+}
+
+func NewPoolResultWithMinWorkers(minWorkers int) poolResultOption {
+	return func(prc *poolResultConfig) error {
+		if minWorkers <= 0 {
+			return errors.NewError(errors.ErrInvalidArgument, nil, "minWorkers must be a number greater than 0")
+		}
+		prc.MaxWorkers = minWorkers
 		return nil
 	}
 }
@@ -165,6 +198,7 @@ func NewPoolResult[T, R any](ctx context.Context, work WorkerFuncResult[T, R], o
 	}
 
 	config := &poolResultConfig{
+		MinWorkers:   0,
 		MaxWorkers:   25,
 		BufferSize:   0,
 		IdleDuration: time.Second,
@@ -178,6 +212,7 @@ func NewPoolResult[T, R any](ctx context.Context, work WorkerFuncResult[T, R], o
 	}
 
 	pool := &PoolResult[T, R]{
+		MinWorkers:   config.MinWorkers,
 		MaxWorkers:   config.MaxWorkers,
 		IdleDuration: config.IdleDuration,
 		KeepAlive:    config.KeepAlive,
@@ -349,6 +384,28 @@ lifecycle:
 	}
 }
 
+func (p *PoolResult[T, R]) ProduceTasks(n int, producer func(index int) T) error {
+	var wg sync.WaitGroup
+	tasks := make(chan T)
+
+	if producer == nil {
+		producer = func(index int) T { var z T; return z }
+	}
+
+	wg.Go(func() {
+		defer close(tasks)
+		for i := range n {
+			if err := channels.Send(p.ctx, tasks, producer(i)); err != nil {
+				return
+			}
+		}
+	})
+
+	err := p.RecvTasks(tasks)
+	wg.Wait()
+	return err
+}
+
 func (p *PoolResult[T, R]) RecvTasks(tasks <-chan T) error {
 	if tasks == nil {
 		return errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "The given channel is nil.")
@@ -448,6 +505,7 @@ func (p *PoolResult[T, R]) submitWorker(work WorkerFuncResult[T, R]) bool {
 						continue
 					}
 					timer.Stop()
+
 					channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerIdleState, currState: workerDoneState}))
 					break lifecycle
 				}
