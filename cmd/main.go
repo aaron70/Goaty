@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aaron70/goaty/channels"
 	"github.com/aaron70/goaty/concurrency"
 	"github.com/aaron70/goaty/utils"
 )
@@ -26,7 +27,12 @@ func printMetrics[T, R any](pool *concurrency.PoolResult[T, R]) {
 	fmt.Printf("\tDone: %d\n", metrics.Tasks.Done)
 	fmt.Printf("\tFailed: %d\n", metrics.Tasks.Failed)
 	fmt.Println("Workers:")
+	fmt.Printf("\tCreated: %d\n", metrics.Workers.Created)
 	fmt.Printf("\tAlive: %d\n", metrics.Workers.Alive)
+	fmt.Printf("\tRunning: %d\n", metrics.Workers.Running)
+	fmt.Printf("\tIdle: %d\n", metrics.Workers.Idle)
+	fmt.Printf("\tFailed: %d\n", metrics.Workers.Failed)
+	fmt.Printf("\tDone: %d\n", metrics.Workers.Done)
 }
 
 func main() {
@@ -37,12 +43,12 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	n := 20
+	n := 70
 	tasks := make(chan int, n)
 
 	pool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, task int) (int, error) {
 		// fmt.Printf("Working on task: %d\n", task)
-		time.Sleep(time.Second)
+		time.Sleep(time.Millisecond * 1500)
 		return task, nil
 	}))
 
@@ -64,7 +70,7 @@ func main() {
 	wg.Go(func() {
 		for i := range n {
 			tasks <- i
-			time.Sleep(time.Millisecond * 700)
+			time.Sleep(time.Millisecond * 100)
 		}
 		close(tasks)
 	})
@@ -72,6 +78,11 @@ func main() {
 	utils.LogDefaultErr(pool.RecvTasks(tasks))
 	pool.Close()
 
-	utils.LogDefaultErr(pool.Wait())
+	// utils.LogDefaultErr(pool.Wait())
+
+	res, errs := pool.ResultsErr()
+	channels.Drain(ctx, res)
+	channels.Drain(ctx, errs)
+
 	wg.Wait()
 }

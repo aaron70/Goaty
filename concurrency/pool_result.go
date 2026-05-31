@@ -14,15 +14,43 @@ import (
 type eventType string
 
 const (
-	taskEnqueued    = "TASK_ENQUEUED"
-	taskConsumed    = "TASK_CONSUMED"
-	taskDone        = "TASK_DONE"
-	taskFailed      = "TASK_FAILED"
-	taskQueueClosed = "TASK_QUEUE_CLOSED"
+	taskEnqueued       = "TASK_ENQUEUED"
+	taskConsumed       = "TASK_CONSUMED"
+	taskDone           = "TASK_DONE"
+	taskFailed         = "TASK_FAILED"
+	taskQueueClosed    = "TASK_QUEUE_CLOSED"
+	workerStateChanged = "WORKER_STATE_CHANGED"
+)
+
+type workerState string
+
+const (
+	prevState = "prev_state"
+	currState = "curr_state"
+)
+
+const (
+	workerCreatedState workerState = "CREATED"
+	workerRunningState workerState = "RUNNING"
+	workerIdleState    workerState = "IDLE"
+	workerDoneState    workerState = "DONE"
+	workerFailedState  workerState = "FAILED"
 )
 
 type event struct {
 	Type eventType
+	Data map[string]any
+}
+
+func newEventWithData(eventType eventType, data map[string]any) event {
+	return event{
+		Type: eventType,
+		Data: data,
+	}
+}
+
+func newEvent(eventType eventType) event {
+	return newEventWithData(eventType, make(map[string]any))
 }
 
 type TasksMetrics struct {
@@ -33,7 +61,12 @@ type TasksMetrics struct {
 }
 
 type WorkersMetrics struct {
-	Alive int64
+	Alive   int64
+	Created int64
+	Running int64
+	Idle    int64
+	Done    int64
+	Failed  int64
 }
 
 type Metrics struct {
@@ -47,6 +80,7 @@ type PoolResult[T, R any] struct {
 	MaxWorkers   int
 	BufferSize   int
 	IdleDuration time.Duration
+	KeepAlive    bool
 
 	ctx  context.Context
 	work WorkerFuncResult[T, R]
@@ -58,12 +92,16 @@ type PoolResult[T, R any] struct {
 	results     chan R
 	errors      chan error
 
-	tasksEnqueued atomic.Int64
-	tasksConsumed atomic.Int64
-	tasksDone     atomic.Int64
-	tasksFailed   atomic.Int64
-	workersAlive  atomic.Int64
-	workersIdle   atomic.Int64
+	tasksEnqueued  atomic.Int64
+	tasksConsumed  atomic.Int64
+	tasksDone      atomic.Int64
+	tasksFailed    atomic.Int64
+	workersAlive   atomic.Int64
+	workersCreated atomic.Int64
+	workersRunning atomic.Int64
+	workersIdle    atomic.Int64
+	workersDone    atomic.Int64
+	workersFailed  atomic.Int64
 
 	workers   sync.WaitGroup
 	closeOnce sync.Once
@@ -78,14 +116,16 @@ func NewPoolResult[T, R any](ctx context.Context, work WorkerFuncResult[T, R]) (
 		return nil, errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "The work function can't be nil, the work function provides the ability to workers to process the tasks.")
 	}
 
-	maxWorkers := 20
-	bufferSize := 20
+	maxWorkers := 3 
+	bufferSize := 1000
 	idleDuration := time.Second
+	keepAlive := true
 
 	pool := &PoolResult[T, R]{
 		MaxWorkers:   maxWorkers,
 		BufferSize:   bufferSize,
 		IdleDuration: idleDuration,
+		KeepAlive:    keepAlive,
 
 		ctx:  ctx,
 		work: work,
@@ -106,7 +146,7 @@ func (p *PoolResult[T, R]) Close() {
 	p.closeOnce.Do(func() {
 		close(p.queue)
 		close(p.queueDone)
-		channels.Send(p.ctx, p.events, event{taskQueueClosed})
+		channels.Send(p.ctx, p.events, newEvent(taskQueueClosed))
 	})
 }
 
@@ -144,7 +184,12 @@ func (p *PoolResult[T, R]) Metrics() Metrics {
 			Failed:   p.tasksFailed.Load(),
 		},
 		Workers: WorkersMetrics{
-			Alive: p.workersAlive.Load(),
+			Alive:   p.workersAlive.Load(),
+			Created: p.workersCreated.Load(),
+			Running: p.workersRunning.Load(),
+			Idle:    p.workersIdle.Load(),
+			Done:    p.workersDone.Load(),
+			Failed:  p.workersFailed.Load(),
 		},
 	}
 }
@@ -166,6 +211,8 @@ func (p *PoolResult[T, R]) monitor() {
 	// fmt.Println("Monitor has started...")
 	// defer fmt.Println("Monitor has exited...")
 	defer close(p.monitorDone)
+	defer close(p.results)
+	defer close(p.errors)
 
 lifecycle:
 	for {
@@ -180,7 +227,9 @@ lifecycle:
 		switch event.Type {
 		case taskEnqueued:
 			p.tasksEnqueued.Add(1)
-			p.submitWorker(p.work)
+			if p.workersIdle.Load() <= 0 {
+				p.submitWorker(p.work)
+			}
 		case taskConsumed:
 			p.tasksEnqueued.Add(-1)
 			p.tasksConsumed.Add(1)
@@ -200,6 +249,27 @@ lifecycle:
 			if p.IsDone() {
 				break lifecycle
 			}
+		case workerStateChanged:
+			prev := event.Data[prevState].(workerState)
+			curr := event.Data[currState].(workerState)
+			switch prev {
+			case workerRunningState:
+				p.workersRunning.Add(-1)
+			case workerIdleState:
+				p.workersIdle.Add(-1)
+			}
+			switch curr {
+			case workerRunningState:
+				p.workersRunning.Add(1)
+			case workerIdleState:
+				p.workersIdle.Add(1)
+			case workerDoneState:
+				p.workersDone.Add(1)
+				p.workersAlive.Add(-1)
+			case workerFailedState:
+				p.workersIdle.Add(1)
+				p.workersAlive.Add(-1)
+			}
 		}
 	}
 }
@@ -218,7 +288,7 @@ func (p *PoolResult[T, R]) RecvTasks(tasks <-chan T) error {
 			break
 		}
 
-		channels.Send(p.ctx, p.events, event{taskEnqueued})
+		channels.Send(p.ctx, p.events, newEvent(taskEnqueued))
 		err = channels.Send(p.ctx, p.queue, task)
 		if err != nil {
 			return errors.NewError(nil, err, "Could not enqueue the task")
@@ -236,6 +306,7 @@ func (p *PoolResult[T, R]) tryCreateGoroutine(worker func(ctx context.Context, i
 		}
 		if p.workersAlive.CompareAndSwap(aliveWorkers, aliveWorkers+1) {
 			id := uuid.NewString()
+			p.workersCreated.Add(1)
 			p.workers.Go(worker(p.ctx, id))
 			return true
 		}
@@ -247,15 +318,23 @@ func (p *PoolResult[T, R]) submitWorker(work WorkerFuncResult[T, R]) bool {
 		return func() {
 			// fmt.Printf("Worker %s stared...\n", id)
 			// defer fmt.Printf("Worker %s finished...\n", id)
-			defer p.workersAlive.Add(-1)
+			// defer channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{ prevState: }))
 			defer func() {
 				if r := recover(); r != nil {
-					channels.Send(p.ctx, p.events, event{taskFailed})
+					channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerRunningState, currState: workerFailedState}))
+					channels.Send(p.ctx, p.events, newEvent(taskFailed))
 					channels.Send(p.ctx, p.errors, errors.NewError(errors.ErrPanicRecovered, nil, "Worker %s has panic: %v", id, r))
 				}
 			}()
+
+			channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerCreatedState, currState: workerIdleState}))
+
 			timer := time.NewTimer(p.IdleDuration)
+			if p.KeepAlive {
+				timer.C = nil // Will block for ever the <-time.C case
+			}
 			done := true
+		lifecycle:
 			for {
 				select {
 				case <-ctx.Done():
@@ -263,37 +342,46 @@ func (p *PoolResult[T, R]) submitWorker(work WorkerFuncResult[T, R]) bool {
 					if err != nil {
 						_ = channels.Send(p.ctx, p.errors, err)
 					}
-					return
+					channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerIdleState, currState: workerDoneState}))
+					break lifecycle
 
 				case task, open := <-p.queue:
 					done = false
 					if !open {
 						// fmt.Printf("[Worker %s]: Queue is closed!\n", id)
-						return
+						channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerIdleState, currState: workerDoneState}))
+						break lifecycle
 					}
-					channels.Send(p.ctx, p.events, event{taskConsumed})
+					channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerIdleState, currState: workerRunningState}))
+					channels.Send(p.ctx, p.events, newEvent(taskConsumed))
 					res, err := work(p.ctx, task)
 					if err != nil {
-						channels.Send(p.ctx, p.events, event{taskFailed})
+						channels.Send(p.ctx, p.events, newEvent(taskFailed))
 						channels.Send(ctx, p.errors, err)
 					} else {
 						err := channels.Send(ctx, p.results, res)
 						if err != nil {
-							channels.Send(p.ctx, p.events, event{taskFailed})
+							channels.Send(p.ctx, p.events, newEvent(taskFailed))
 							channels.Send(ctx, p.errors, err)
 						}
-						channels.Send(p.ctx, p.events, event{taskDone})
+						channels.Send(p.ctx, p.events, newEvent(taskDone))
 					}
 					done = true
 					timer.Reset(p.IdleDuration)
+					channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerRunningState, currState: workerIdleState}))
 				case <-timer.C:
-					if !done {
+					if !done || p.KeepAlive {
 						continue
 					}
 					timer.Stop()
-					return
+					channels.Send(p.ctx, p.events, newEventWithData(workerStateChanged, map[string]any{prevState: workerIdleState, currState: workerDoneState}))
+					break lifecycle
 				}
 			}
 		}
 	})
+}
+
+func (p *PoolResult[T, R]) ResultsErr() (<-chan R, <-chan error) {
+	return p.results, p.errors
 }
