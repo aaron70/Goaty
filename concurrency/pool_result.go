@@ -300,6 +300,10 @@ func (p *PoolResult[T, R]) isQueueClosed() bool {
 	}
 }
 
+func (p *PoolResult[T, R]) AcceptsTasks() bool {
+	return !p.isQueueClosed()
+}
+
 func (p *PoolResult[T, R]) IsDone() bool {
 	return p.isQueueClosed() && p.tasksEnqueued.Load() <= 0 && p.tasksConsumed.Load() <= 0 && p.workersAlive.Load() <= 0
 }
