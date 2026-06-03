@@ -10,7 +10,7 @@ import (
 	"github.com/aaron70/decoy"
 	"github.com/aaron70/goaty/channels"
 	"github.com/aaron70/goaty/concurrency"
-	concurrencyv2 "github.com/aaron70/goaty/concurrency/v2"
+	"github.com/aaron70/goaty/concurrency"
 	"github.com/aaron70/goaty/utils"
 )
 
@@ -30,7 +30,7 @@ func main() {
 		decoy.WithTemplateNamed("template"),
 	))
 
-	pool := utils.Must(concurrencyv2.NewPool(ctx, func(ctx context.Context, task string) (string, error) {
+	pool := utils.Must(concurrency.NewPool(ctx, func(ctx context.Context, task string) (string, error) {
 		buffer := new(bytes.Buffer)
 		err := templateCompiled.Execute(buffer, "")
 		if err != nil {
@@ -38,16 +38,16 @@ func main() {
 		}
 		return buffer.String(), nil
 	},
-		// concurrencyv2.NewPoolWithMinWorkers(0),
-		concurrencyv2.NewPoolWithMaxWorkers(1),
-		concurrencyv2.NewPoolWithBufferSize(0),
-		// concurrencyv2.NewPoolWithKeepAlive(true),
-		// concurrencyv2.NewPoolWithIdleDuration(time.Millisecond * 100),
+		// concurrency.NewPoolWithMinWorkers(0),
+		concurrency.NewPoolWithMaxWorkers(1),
+		concurrency.NewPoolWithBufferSize(0),
+		// concurrency.NewPoolWithKeepAlive(true),
+		// concurrency.NewPoolWithIdleDuration(time.Millisecond * 100),
 	))
 
 	done := make(chan struct{})
 	wg.Go(func() {
-		defer concurrencyv2.PrintPools([]string{"pool"}, pool)
+		defer concurrency.PrintPools([]string{"pool"}, pool)
 		for {
 			select {
 			case <-done:
@@ -55,7 +55,7 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-time.Tick(time.Millisecond * 500):
-				concurrencyv2.PrintPools([]string{"pool"}, pool)
+				concurrency.PrintPools([]string{"pool"}, pool)
 			}
 		}
 	})
