@@ -1,105 +1,145 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"sync"
-	"text/tabwriter"
 	"time"
 
+	"github.com/aaron70/decoy"
 	"github.com/aaron70/goaty/channels"
 	"github.com/aaron70/goaty/concurrency"
+	concurrencyv2 "github.com/aaron70/goaty/concurrency/v2"
 	"github.com/aaron70/goaty/utils"
 )
-
-func clearScreen() {
-	fmt.Print("\033[H\033[2J")
-}
-
-func printMetrics[T, R any](names []string, pools ...*concurrency.PoolResult[T, R]) {
-	clearScreen()
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-
-	row := func(label string, values []string) {
-		fmt.Fprintf(w, "%s\t%s\n", label, strings.Join(values, "\t"))
-	}
-
-	getMetric := func(fn func(*concurrency.PoolResult[T, R]) any) []string {
-		s := make([]string, len(pools))
-		for i, pool := range pools {
-			s[i] = fmt.Sprintf("%v", fn(pool))
-		}
-		return s
-	}
-
-	// Header
-	fmt.Fprintf(w, "Metric\t%s\n", strings.Join(names, "\t"))
-	fmt.Fprintf(w, "------\t%s\n", strings.Join(make([]string, len(names)), "\t"))
-	row("Queue is Done: ", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.IsDone() }))
-	row("Queue accpets tasks: ", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.AcceptsTasks() }))
-	fmt.Fprintf(w, "------\t%s\n", strings.Join(make([]string, len(names)), "\t"))
-
-	// Task rows
-	row("Tasks Enqueued", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.Metrics().Tasks.Enqueued }))
-	row("Tasks Consumed", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.Metrics().Tasks.Consumed }))
-	row("Tasks Done", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.Metrics().Tasks.Done }))
-	row("Tasks Failed", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.Metrics().Tasks.Failed }))
-	fmt.Fprintf(w, "------\t%s\n", strings.Join(make([]string, len(names)), "\t"))
-
-	// Worker rows
-	row("Workers Created", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.Metrics().Workers.Created }))
-	row("Workers Alive", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.Metrics().Workers.Alive }))
-	row("Workers Running", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.Metrics().Workers.Running }))
-	row("Workers Idle", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.Metrics().Workers.Idle }))
-	row("Workers Done", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.Metrics().Workers.Done }))
-	row("Workers Failed", getMetric(func(p *concurrency.PoolResult[T, R]) any { return p.Metrics().Workers.Failed }))
-
-	w.Flush()
-}
 
 func main() {
 	var wg sync.WaitGroup
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
 
-	sleep := time.Second * 2
+	// sleep := time.Microsecond * 2
 
-	n := 1
-	buffer := 0
+	n := 30000
+	// buffer := n
+	// maxWorkers := 200
 
-	producerPool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, task int) (int, error) {
+	d := utils.Must(decoy.NewDecoyWithSeed(0))
+	templateCompiled := utils.Must(d.CompileTemplate(`{ "id": {{ NextIncrementalInt "id" 0 1}}, "text": "{{ RandomText 50 }}" }`,
+		decoy.WithTemplateNamed("template"),
+	))
+
+	pool := utils.Must(concurrencyv2.NewPool(ctx, func(ctx context.Context, task string) (string, error) {
+		buffer := new(bytes.Buffer)
+		err := templateCompiled.Execute(buffer, "")
+		if err != nil {
+			return "", err
+		}
+		return buffer.String(), nil
+	},
+		// concurrencyv2.NewPoolWithMinWorkers(0),
+		concurrencyv2.NewPoolWithMaxWorkers(1),
+		concurrencyv2.NewPoolWithBufferSize(0),
+		// concurrencyv2.NewPoolWithKeepAlive(true),
+		// concurrencyv2.NewPoolWithIdleDuration(time.Millisecond * 100),
+	))
+
+	done := make(chan struct{})
+	wg.Go(func() {
+		defer concurrencyv2.PrintPools([]string{"pool"}, pool)
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-time.Tick(time.Millisecond * 500):
+				concurrencyv2.PrintPools([]string{"pool"}, pool)
+			}
+		}
+	})
+
+	wg.Go(func() {
+		res, errs := pool.ResultsErr()
+		wg.Go(func() {
+			channels.Drain(ctx, res)
+		})
+		wg.Go(func() {
+			channels.Drain(ctx, errs)
+		})
+	})
+
+	tasks := make(chan string, n)
+	wg.Go(func() {
+		for i := range n {
+			// time.Sleep(time.Millisecond * 1000)
+			tasks <- fmt.Sprintf("%d", i)
+		}
+		close(tasks)
+	})
+
+	utils.PanicErr(pool.RecvTasks(tasks))
+	pool.Close()
+
+	pool.Wait()
+	close(done)
+	wg.Wait()
+}
+
+func main2() {
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+
+	sleep := time.Microsecond * 1000 * 1
+
+	n := 3000
+	buffer := n
+	maxWorkers := 200
+
+	producerPool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, task string) (string, error) {
+		return decoy.Default.ParseTemplateString(`{ "id": {{ NextIncrementalInt "id" 0 1 }}, "text": "{{ RandomText 100 }}" }`)
+	},
+		concurrency.NewPoolResultWithBufferSize(buffer),
+		concurrency.NewPoolResultWithMaxWorkers(maxWorkers),
+	))
+
+	consumer1Pool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, template string) (string, error) {
+		return decoy.Default.ParseTemplateString(`echo "{{ .Template }}"`,
+			decoy.WithData(map[string]any{"Template": template}),
+		)
+	},
+		concurrency.NewPoolResultWithBufferSize(buffer),
+		concurrency.NewPoolResultWithMaxWorkers(maxWorkers),
+	))
+
+	consumer2Pool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, task string) (string, error) {
 		time.Sleep(sleep)
 		return task, nil
-	}))
+	},
+		concurrency.NewPoolResultWithBufferSize(buffer),
+		concurrency.NewPoolResultWithMaxWorkers(maxWorkers),
+	))
 
-	consumer1Pool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, task int) (int, error) {
+	consumer3Pool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, task string) (string, error) {
 		time.Sleep(sleep)
-		return task, nil
-	}))
-
-	consumer2Pool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, task int) (int, error) {
-		time.Sleep(sleep)
-		return task, nil
-	}))
-
-	consumer3Pool := utils.Must(concurrency.NewPoolResult(ctx, func(ctx context.Context, task int) (int, error) {
-		time.Sleep(sleep)
-		return task, nil
-	}))
+		return decoy.Default.ParseTemplateString(`Written: {{ . }}`, decoy.WithData(task))
+	},
+		concurrency.NewPoolResultWithBufferSize(buffer),
+		concurrency.NewPoolResultWithMaxWorkers(maxWorkers),
+	))
 
 	p, perrs := producerPool.ResultsErr()
 	c1, c1errs := consumer1Pool.ResultsErr()
-	c2, c2errs := consumer1Pool.ResultsErr()
-	c3, c3errs := consumer1Pool.ResultsErr()
+	c2, c2errs := consumer2Pool.ResultsErr()
+	c3, c3errs := consumer3Pool.ResultsErr()
 	errs := channels.Merge(ctx, buffer, perrs, c1errs, c2errs, c3errs)
 
 	wg.Go(func() {
-		producerPool.ProduceTasks(n, func(index int) int {
-			time.Sleep(sleep)
-			return index
+		producerPool.ProduceTasks(n, func(index int) string {
+			// time.Sleep(sleep)
+			return fmt.Sprintf("%d", index)
 		})
 		producerPool.Close()
 	})
@@ -123,27 +163,30 @@ func main() {
 		channels.Drain(ctx, c3)
 	})
 
+	done := make(chan struct{})
 	wg.Go(func() {
+		defer concurrency.PrintPool([]string{"Producer", "consumer1", "consumer2", "consumer3"}, producerPool, consumer1Pool, consumer2Pool, consumer3Pool)
 		for {
 			select {
+			case <-done:
+				return
 			case <-ctx.Done():
 				return
 			case <-time.Tick(time.Millisecond * 500):
-				printMetrics([]string{"Producer", "consumer1", "consumer2", "consumer3"}, producerPool, consumer1Pool, consumer2Pool, consumer3Pool)
+				concurrency.PrintPool([]string{"Producer", "consumer1", "consumer2", "consumer3"}, producerPool, consumer1Pool, consumer2Pool, consumer3Pool)
 			}
 		}
 	})
 
-	wg.Go(func() {
-		for {
-			err, open, errCtx := channels.Recv(ctx, errs)
-			utils.PanicErr(errCtx)
-			utils.PanicErr(err)
-			if !open {
-				break
-			}
+	for {
+		err, open, errCtx := channels.Recv(ctx, errs)
+		utils.PanicErr(errCtx)
+		utils.PanicErr(err)
+		if !open {
+			break
 		}
-	})
+	}
+	close(done)
 
 	producerPool.Wait()
 	consumer1Pool.Wait()

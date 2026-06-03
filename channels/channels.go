@@ -70,3 +70,15 @@ func Merge[T any](ctx context.Context, buffer int, channels ...<-chan T) chan T 
 
 	return out
 }
+
+// IsDone consumes the channel and discards the value,
+// so it shouldn't not be called on a channel with data.
+// Only done signal channels
+func IsDone[T any](ch <-chan T) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
