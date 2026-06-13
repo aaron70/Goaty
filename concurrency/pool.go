@@ -33,9 +33,9 @@ type Metrics struct {
 
 type WorkerFunc[T, R any] func(ctx context.Context, task T) (R, error)
 
-type poolOption func(*poolConfig) error
+type PoolOption func(*PoolConfig) error
 
-type poolConfig struct {
+type PoolConfig struct {
 	MaxWorkers   int
 	MinWorkers   int
 	BufferSize   int
@@ -74,8 +74,8 @@ type Pool[T, R any] struct {
 	closeResultsOnce sync.Once
 }
 
-func NewPoolWithMaxWorkers(maxWorkers int) poolOption {
-	return func(prc *poolConfig) error {
+func NewPoolWithMaxWorkers(maxWorkers int) PoolOption {
+	return func(prc *PoolConfig) error {
 		if maxWorkers <= 0 {
 			return errors.NewError(errors.ErrInvalidArgument, nil, "maxWorkers must be a number greater than 0")
 		}
@@ -87,8 +87,8 @@ func NewPoolWithMaxWorkers(maxWorkers int) poolOption {
 	}
 }
 
-func NewPoolWithMinWorkers(minWorkers int) poolOption {
-	return func(prc *poolConfig) error {
+func NewPoolWithMinWorkers(minWorkers int) PoolOption {
+	return func(prc *PoolConfig) error {
 		if minWorkers < 0 {
 			return errors.NewError(errors.ErrInvalidArgument, nil, "minWorkers must be a number greater than 0")
 		}
@@ -100,8 +100,8 @@ func NewPoolWithMinWorkers(minWorkers int) poolOption {
 	}
 }
 
-func NewPoolWithBufferSize(bufferSize int) poolOption {
-	return func(prc *poolConfig) error {
+func NewPoolWithBufferSize(bufferSize int) PoolOption {
+	return func(prc *PoolConfig) error {
 		if bufferSize < 0 {
 			return errors.NewError(errors.ErrInvalidArgument, nil, "bufferSize must be 0 or a positive number")
 		}
@@ -111,8 +111,8 @@ func NewPoolWithBufferSize(bufferSize int) poolOption {
 }
 
 // The idle duration should be greater than the duration that takes each record to be produced, to avoid creating a worker for each record.
-func NewPoolWithIdleDuration(idleDuration time.Duration) poolOption {
-	return func(prc *poolConfig) error {
+func NewPoolWithIdleDuration(idleDuration time.Duration) PoolOption {
+	return func(prc *PoolConfig) error {
 		minIdleDuration := time.Millisecond
 		if idleDuration < minIdleDuration {
 			return errors.NewError(errors.ErrInvalidArgument, nil, "idleDuration must be greater than %s. Although %s is the minimum duration is not recommended to use too low values as the idle timer could trigger before the job could read the task, leaving the task in the queue forever.", minIdleDuration, minIdleDuration)
@@ -122,14 +122,14 @@ func NewPoolWithIdleDuration(idleDuration time.Duration) poolOption {
 	}
 }
 
-func NewPoolWithKeepAlive(KeepAlive bool) poolOption {
-	return func(prc *poolConfig) error {
+func NewPoolWithKeepAlive(KeepAlive bool) PoolOption {
+	return func(prc *PoolConfig) error {
 		prc.KeepAlive = KeepAlive
 		return nil
 	}
 }
 
-func NewPool[T, R any](ctx context.Context, work WorkerFunc[T, R], options ...poolOption) (*Pool[T, R], error) {
+func NewPool[T, R any](ctx context.Context, work WorkerFunc[T, R], options ...PoolOption) (*Pool[T, R], error) {
 	if ctx == nil {
 		return nil, errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "Context should not be nil, please use content.Background() or similar if no need a context.")
 	}
@@ -138,7 +138,7 @@ func NewPool[T, R any](ctx context.Context, work WorkerFunc[T, R], options ...po
 		return nil, errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "The work function can't be nil, the work function provides the ability to workers to process the tasks.")
 	}
 
-	config := &poolConfig{
+	config := &PoolConfig{
 		MinWorkers:   0,
 		MaxWorkers:   math.MaxInt,
 		BufferSize:   0,
@@ -363,6 +363,7 @@ func (p *Pool[T, R]) Close() {
 		close(p.queue)
 		close(p.queueDone)
 	})
+	go p.Wait()
 }
 
 func (p *Pool[T, R]) Wait() error {

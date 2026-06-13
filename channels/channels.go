@@ -22,6 +22,17 @@ func Send[T any](ctx context.Context, ch chan<- T, value T) (err error) {
 	}
 }
 
+func SendAsync[T any](ctx context.Context, ch chan<- T, value T) {
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case ch <- value:
+			return
+		}
+	}()
+}
+
 func Recv[T any](ctx context.Context, ch <-chan T) (T, bool, error) {
 	var zero T
 	select {
@@ -42,6 +53,10 @@ func Drain[T any](ctx context.Context, ch <-chan T) error {
 		}
 	}
 	return nil
+}
+
+func DrainAsync[T any](ctx context.Context, ch <-chan T) {
+	go Drain(ctx, ch)
 }
 
 func Merge[T any](ctx context.Context, buffer int, channels ...<-chan T) chan T {
