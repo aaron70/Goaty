@@ -31,7 +31,19 @@ type Metrics struct {
 	workersFailed  int64
 }
 
-type WorkerFunc[T, R any] func(ctx context.Context, task T) (R, error)
+type WorkerFuncReturn[T, R any] func(ctx context.Context, task T) (R, error)
+type WorkerFunc[T, R any] func(ctx context.Context, task T, sendResult func(R), sendError func(error))
+
+func ToWorkerFunc[T, R any](worker WorkerFuncReturn[T, R]) WorkerFunc[T, R] {
+	return func(ctx context.Context, task T, sendResult func(R), sendError func(error)) {
+		res, err := worker(ctx, task)
+		if err != nil {
+			sendError(err)
+		} else {
+			sendResult(res)
+		}
+	}
+}
 
 type PoolOption func(*PoolConfig) error
 
@@ -202,7 +214,7 @@ func (p *Pool[T, R]) tryCreateWorker(worker func(ctx context.Context, id string)
 	}
 }
 
-func (p *Pool[T, R]) createWorker(ctx context.Context, id string) func() {
+func (p *Pool[T, R]) createWorker(ctx context.Context, _ string) func() {
 	return func() {
 		var state *atomic.Int64
 		updateState := func(newState *atomic.Int64) {
@@ -230,6 +242,21 @@ func (p *Pool[T, R]) createWorker(ctx context.Context, id string) func() {
 			timer.C = nil // Will block for ever the <-time.C case
 		}
 
+		sendErr := func(err error) {
+			p.taskFailed()
+			p.publishError(ctx, err)
+		}
+
+		sendResult := func(res R) {
+			p.taskDone()
+			err := p.publishResult(ctx, res)
+			if err != nil {
+				p.taskFailed()
+			} else {
+				p.taskDelivered()
+			}
+		}
+
 	lifecycle:
 		for {
 			if !timer.Stop() {
@@ -254,20 +281,7 @@ func (p *Pool[T, R]) createWorker(ctx context.Context, id string) func() {
 				updateState(&p.workersRunning)
 				p.taskConsumed()
 
-				res, err := p.work(ctx, task)
-				if err != nil {
-					p.taskFailed()
-					p.publishError(ctx, err)
-					continue
-				}
-				p.taskDone()
-				err = p.publishResult(ctx, res)
-				if err != nil {
-					p.taskFailed()
-					continue
-				}
-				p.taskDelivered()
-
+				p.work(ctx, task, sendResult, sendErr)
 			case <-timer.C:
 				if p.KeepAlive || p.workersAlive.Load() <= int64(p.MinWorkers) {
 					continue
