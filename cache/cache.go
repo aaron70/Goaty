@@ -32,6 +32,8 @@ func NewTTLCache[K, T any](ttl time.Duration, purge time.Duration) (*TTLCache[K,
 	cache := &TTLCache[K,T]{
 		TTL:       ttl,
 		PurgeTime: purge,
+		cache: sync.Map{},
+		done: make(chan struct{}),
 	}
 
 	go func(c *TTLCache[K,T]) {
@@ -89,5 +91,8 @@ func (c *TTLCache[K, T]) Clear() error {
 }
 
 func (c *TTLCache[K, T]) Close() {
+	// if c.done == nil || channels.IsDone(c.done) {
+	// 	return
+	// }
 	close(c.done)
 }
