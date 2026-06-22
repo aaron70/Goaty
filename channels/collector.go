@@ -86,6 +86,7 @@ func (c *BatchCollector[I]) Collect(ctx context.Context, in <-chan I) {
 	for {
 		v, open, err := Recv(ctx, in)
 		if !open || err != nil {
+			c.Close()
 			return
 		}
 		c.Add(ctx, v)
