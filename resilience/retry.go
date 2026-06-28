@@ -29,24 +29,60 @@ type RetryableWithResult[T any] struct {
 	timer  *time.Timer
 }
 
-func NewRetryableWithResult[T any](options ...RetryOption) (*RetryableWithResult[T], error) {
-	config := &RetryConfig{
+func DefaultRetryConfig() RetryConfig {
+	return RetryConfig{
 		ShouldRetry: func(retry int, err error) (bool, error) { return true, nil },
-		BackOffFunc: func(retry int, err error) time.Duration { return 0 },
+		BackOffFunc: func(retry int, err error) time.Duration { return time.Second },
 		OnRetry:     func(retry int, err error) {},
 		OnFailure:   func(retry int, err error) {},
 		OnSuccess:   func(retry int) {},
 	}
+}
+
+func validateRetryConfig(config *RetryConfig) error {
+	if config.MaxRetries < 0 {
+		return errors.NewError(errors.ErrInvalidArgument, nil, "MaxRetries must be a number greater or equal to 0")
+	}
+	if config.ShouldRetry == nil {
+		return errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "ShouldRetry must not be nil")
+	}
+	if config.BackOffFunc == nil {
+		return errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "BackOffFunc must not be nil")
+	}
+	if config.OnRetry == nil {
+		return errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "OnRetry must not be nil")
+	}
+	if config.OnFailure == nil {
+		return errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "OnFailure must not be nil")
+	}
+	if config.OnSuccess == nil {
+		return errors.NewError(errors.ErrInvalidArgument, errors.ErrNilReference, "OnSuccess must not be nil")
+	}
+	return nil
+}
+
+func NewRetryableWithResult[T any](options ...RetryOption) (*RetryableWithResult[T], error) {
+	config := DefaultRetryConfig()
 
 	for _, option := range options {
-		if err := option(config); err != nil {
+		if err := option(&config); err != nil {
 			return nil, err
 		}
 	}
 
 	return &RetryableWithResult[T]{
-		Config: *config,
+		Config: config,
 	}, nil
+}
+
+func NewRetryableWithConfig(config RetryConfig) RetryOption {
+	return func(c *RetryConfig) error {
+		if err := validateRetryConfig(&config); err != nil {
+			return err
+		}
+		*c = config
+		return nil
+	}
 }
 
 func NewRetryableWithMaxRetries(maxRetries int) RetryOption {
@@ -111,6 +147,7 @@ func NewRetryableWithOnSuccess(onSuccess func(retry int)) RetryOption {
 
 func (r *RetryableWithResult[T]) RetryWithResult(ctx context.Context, f RetryableFucWithResult[T]) (T, error) {
 	var (
+		res  T
 		zero T
 		err  error
 	)
@@ -120,7 +157,7 @@ func (r *RetryableWithResult[T]) RetryWithResult(ctx context.Context, f Retryabl
 
 	for attempt := range r.Config.MaxRetries + 1 {
 		retryContext, cancel := context.WithCancel(ctx)
-		res, err := f(retryContext)
+		res, err = r.TryWithResult(retryContext, f)
 
 		if err == nil {
 			cancel()
@@ -135,9 +172,9 @@ func (r *RetryableWithResult[T]) RetryWithResult(ctx context.Context, f Retryabl
 			return zero, err
 		}
 
-		if err = r.onRetry(retryContext, retryCount, err); err != nil {
+		if ctxErr := r.onRetry(retryContext, retryCount, err); ctxErr != nil {
 			cancel()
-			return zero, err
+			return zero, ctxErr
 		}
 
 		cancel()
@@ -145,6 +182,17 @@ func (r *RetryableWithResult[T]) RetryWithResult(ctx context.Context, f Retryabl
 	err = errors.NewError(ErrMaxRetriesExhausted, err, "Max retries %d exhausted", r.Config.MaxRetries)
 	r.onFailure(r.Config.MaxRetries, err)
 	return zero, err
+}
+
+func (r RetryableWithResult[T]) TryWithResult(ctx context.Context, f RetryableFucWithResult[T]) (res T, err error) {
+	var zero T
+	defer func() {
+		if r := recover(); r != nil {
+			res, err = zero, errors.NewError(errors.ErrPanicRecovered, errors.New("%v", r), "Retryable function recovered from panic")
+		}
+	}()
+
+	return f(ctx)
 }
 
 func (r RetryableWithResult[T]) onSuccess(retry int) {

@@ -93,6 +93,166 @@ func TestNewRetryableWithResult(t *testing.T) {
 	})
 }
 
+func TestNewRetryableWithConfig(t *testing.T) {
+	t.Run("applies all fields from config", func(t *testing.T) {
+		shouldRetry := func(retry int, err error) (bool, error) { return false, nil }
+		backOffFunc := func(retry int, err error) time.Duration { return time.Second }
+		onRetry := func(retry int, err error) {}
+		onFailure := func(retry int, err error) {}
+		onSuccess := func(retry int) {}
+
+		cfg := RetryConfig{
+			MaxRetries:  5,
+			ShouldRetry: shouldRetry,
+			BackOffFunc: backOffFunc,
+			OnRetry:     onRetry,
+			OnFailure:   onFailure,
+			OnSuccess:   onSuccess,
+		}
+
+		r, err := NewRetryableWithResult[string](NewRetryableWithConfig(cfg))
+		require.NoError(t, err)
+		assert.Equal(t, 5, r.Config.MaxRetries)
+	})
+
+	t.Run("works with RetryWithResult", func(t *testing.T) {
+		cfg := RetryConfig{
+			MaxRetries:  3,
+			ShouldRetry: func(retry int, err error) (bool, error) { return true, nil },
+			BackOffFunc: func(retry int, err error) time.Duration { return time.Millisecond },
+			OnRetry:     func(retry int, err error) {},
+			OnFailure:   func(retry int, err error) {},
+			OnSuccess:   func(retry int) {},
+		}
+
+		var attempt int
+		result, err := RetryWithResult(
+			t.Context(),
+			func(ctx context.Context) (string, error) {
+				attempt++
+				if attempt < 2 {
+					return "", errTestFail
+				}
+				return "ok", nil
+			},
+			NewRetryableWithConfig(cfg),
+		)
+		assert.NoError(t, err)
+		assert.Equal(t, "ok", result)
+		assert.Equal(t, 2, attempt)
+	})
+
+	t.Run("works with Retry", func(t *testing.T) {
+		cfg := RetryConfig{
+			MaxRetries:  3,
+			ShouldRetry: func(retry int, err error) (bool, error) { return true, nil },
+			BackOffFunc: func(retry int, err error) time.Duration { return time.Millisecond },
+			OnRetry:     func(retry int, err error) {},
+			OnFailure:   func(retry int, err error) {},
+			OnSuccess:   func(retry int) {},
+		}
+
+		var attempt int
+		err := Retry(
+			t.Context(),
+			func(ctx context.Context) error {
+				attempt++
+				if attempt < 2 {
+					return errTestFail
+				}
+				return nil
+			},
+			NewRetryableWithConfig(cfg),
+		)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, attempt)
+	})
+
+	t.Run("nil ShouldRetry", func(t *testing.T) {
+		cfg := RetryConfig{
+			MaxRetries:  3,
+			BackOffFunc: func(retry int, err error) time.Duration { return time.Millisecond },
+			OnRetry:     func(retry int, err error) {},
+			OnFailure:   func(retry int, err error) {},
+			OnSuccess:   func(retry int) {},
+		}
+		_, err := NewRetryableWithResult[string](NewRetryableWithConfig(cfg))
+		require.Error(t, err)
+		assert.True(t, stderr.Is(err, goatyerrors.ErrInvalidArgument))
+		assert.True(t, stderr.Is(err, goatyerrors.ErrNilReference))
+	})
+
+	t.Run("nil BackOffFunc", func(t *testing.T) {
+		cfg := RetryConfig{
+			MaxRetries:  3,
+			ShouldRetry: func(retry int, err error) (bool, error) { return true, nil },
+			OnRetry:     func(retry int, err error) {},
+			OnFailure:   func(retry int, err error) {},
+			OnSuccess:   func(retry int) {},
+		}
+		_, err := NewRetryableWithResult[string](NewRetryableWithConfig(cfg))
+		require.Error(t, err)
+		assert.True(t, stderr.Is(err, goatyerrors.ErrInvalidArgument))
+		assert.True(t, stderr.Is(err, goatyerrors.ErrNilReference))
+	})
+
+	t.Run("nil OnRetry", func(t *testing.T) {
+		cfg := RetryConfig{
+			MaxRetries:  3,
+			ShouldRetry: func(retry int, err error) (bool, error) { return true, nil },
+			BackOffFunc: func(retry int, err error) time.Duration { return time.Millisecond },
+			OnFailure:   func(retry int, err error) {},
+			OnSuccess:   func(retry int) {},
+		}
+		_, err := NewRetryableWithResult[string](NewRetryableWithConfig(cfg))
+		require.Error(t, err)
+		assert.True(t, stderr.Is(err, goatyerrors.ErrInvalidArgument))
+		assert.True(t, stderr.Is(err, goatyerrors.ErrNilReference))
+	})
+
+	t.Run("nil OnFailure", func(t *testing.T) {
+		cfg := RetryConfig{
+			MaxRetries:  3,
+			ShouldRetry: func(retry int, err error) (bool, error) { return true, nil },
+			BackOffFunc: func(retry int, err error) time.Duration { return time.Millisecond },
+			OnRetry:     func(retry int, err error) {},
+			OnSuccess:   func(retry int) {},
+		}
+		_, err := NewRetryableWithResult[string](NewRetryableWithConfig(cfg))
+		require.Error(t, err)
+		assert.True(t, stderr.Is(err, goatyerrors.ErrInvalidArgument))
+		assert.True(t, stderr.Is(err, goatyerrors.ErrNilReference))
+	})
+
+	t.Run("nil OnSuccess", func(t *testing.T) {
+		cfg := RetryConfig{
+			MaxRetries:  3,
+			ShouldRetry: func(retry int, err error) (bool, error) { return true, nil },
+			BackOffFunc: func(retry int, err error) time.Duration { return time.Millisecond },
+			OnRetry:     func(retry int, err error) {},
+			OnFailure:   func(retry int, err error) {},
+		}
+		_, err := NewRetryableWithResult[string](NewRetryableWithConfig(cfg))
+		require.Error(t, err)
+		assert.True(t, stderr.Is(err, goatyerrors.ErrInvalidArgument))
+		assert.True(t, stderr.Is(err, goatyerrors.ErrNilReference))
+	})
+
+	t.Run("negative MaxRetries", func(t *testing.T) {
+		cfg := RetryConfig{
+			MaxRetries:  -1,
+			ShouldRetry: func(retry int, err error) (bool, error) { return true, nil },
+			BackOffFunc: func(retry int, err error) time.Duration { return time.Millisecond },
+			OnRetry:     func(retry int, err error) {},
+			OnFailure:   func(retry int, err error) {},
+			OnSuccess:   func(retry int) {},
+		}
+		_, err := NewRetryableWithResult[string](NewRetryableWithConfig(cfg))
+		require.Error(t, err)
+		assert.True(t, stderr.Is(err, goatyerrors.ErrInvalidArgument))
+	})
+}
+
 func TestRetryableWithResult_RetryWithResult(t *testing.T) {
 	t.Run("immediate success", func(t *testing.T) {
 		var onSuccessCall int
