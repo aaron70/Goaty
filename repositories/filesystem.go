@@ -7,8 +7,11 @@ import (
 	"path/filepath"
 
 	"github.com/aaron70/goaty/errors"
+	"github.com/aaron70/goaty/options"
 	"github.com/aaron70/goaty/validations"
 )
+
+var _ Repository[any, any] = new(FS[any, any])
 
 type FS[I comparable, E any] struct {
 	FileExt   string
@@ -67,34 +70,38 @@ func (r *FS[I, E]) fileExists(path string) (bool, error) {
 	return false, err
 }
 
-func (r *FS[I, E]) Save(id I, entity E) (E, error) {
+func (r *FS[I, E]) Save(id I, entity E, opts ...Option) (E, error) {
+	var zero E
+	cfg, err := options.ApplyAnyOptions(opts, fsSaveConfig{
+		Perm: 0644,
+	})
+	if err != nil {
+		return zero, err
+	}
+
 	path := r.filePath(id)
 
 	exists, err := r.fileExists(path)
 	if err != nil {
-		var zero E
 		return zero, errors.NewError(nil, err, "failed to check file existence")
 	}
 	if exists {
-		var zero E
 		return zero, errors.Wrap(errors.ErrConflict, errors.New("entity with id %v already exists", id))
 	}
 
 	data, err := r.marshal(entity)
 	if err != nil {
-		var zero E
 		return zero, errors.NewError(nil, err, "failed to marshal entity")
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		var zero E
+	if err := os.WriteFile(path, data, cfg.Perm); err != nil {
 		return zero, errors.NewError(nil, err, "failed to write file")
 	}
 
 	return entity, nil
 }
 
-func (r *FS[I, E]) Update(id I, entity E) (E, error) {
+func (r *FS[I, E]) Update(id I, entity E, options ...Option) (E, error) {
 	path := r.filePath(id)
 
 	exists, err := r.fileExists(path)
@@ -121,7 +128,7 @@ func (r *FS[I, E]) Update(id I, entity E) (E, error) {
 	return entity, nil
 }
 
-func (r *FS[I, E]) Get(id I) (E, error) {
+func (r *FS[I, E]) Get(id I, options ...Option) (E, error) {
 	path := r.filePath(id)
 
 	data, err := os.ReadFile(path)
@@ -142,7 +149,7 @@ func (r *FS[I, E]) Get(id I) (E, error) {
 	return entity, nil
 }
 
-func (r *FS[I, E]) GetAll() ([]E, error) {
+func (r *FS[I, E]) GetAll(options ...Option) ([]E, error) {
 	entries, err := os.ReadDir(r.rootDir)
 	if err != nil {
 		return nil, errors.NewError(nil, err, "failed to read directory")
@@ -178,7 +185,7 @@ func (r *FS[I, E]) GetAll() ([]E, error) {
 	return entities, nil
 }
 
-func (r *FS[I, E]) Delete(id I) (E, error) {
+func (r *FS[I, E]) Delete(id I, options ...Option) (E, error) {
 	path := r.filePath(id)
 
 	entity, err := r.Get(id)

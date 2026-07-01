@@ -1,8 +1,9 @@
 package repositories
 
 import (
-	"fmt"
 	stderr "errors"
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ func TestFS_Save(t *testing.T) {
 	repo, err := NewFSRepository[string, string](t.TempDir())
 	require.NoError(t, err)
 
-	entity, err := repo.Save("1", "hello")
+	entity, err := repo.Save("1", "hello", FSSaveOptions.WithFileMode(os.ModePerm))
 	assert.NoError(t, err)
 	assert.Equal(t, "hello", entity)
 }
@@ -61,7 +62,7 @@ func TestFS_Update(t *testing.T) {
 	_, err = repo.Save("1", "hello")
 	require.NoError(t, err)
 
-	entity, err := repo.Update("1", "world")
+	entity, err := repo.Update("1", "world", FSSaveOptions.WithFileMode(os.ModePerm))
 	assert.NoError(t, err)
 	assert.Equal(t, "world", entity)
 
