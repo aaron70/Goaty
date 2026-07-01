@@ -2,6 +2,7 @@ package repositories
 
 import (
 	stderr "errors"
+	"os"
 	"testing"
 
 	customErrors "github.com/aaron70/goaty/errors"
@@ -13,7 +14,7 @@ func TestInMemory_Save(t *testing.T) {
 	repo, err := NewInMemoryRepository[string, string]()
 	require.NoError(t, err)
 
-	entity, err := repo.Save("1", "hello")
+	entity, err := repo.Save("1", "hello", FSSaveOptions.WithPermissions(os.ModePerm))
 	assert.NoError(t, err)
 	assert.Equal(t, "hello", entity)
 }

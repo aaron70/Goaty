@@ -1,8 +1,9 @@
 package repositories
 
 import (
-	"fmt"
 	stderr "errors"
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func TestFS_Save_Duplicate(t *testing.T) {
 	repo, err := NewFSRepository[string, string](t.TempDir())
 	require.NoError(t, err)
 
-	_, err = repo.Save("1", "hello")
+	_, err = repo.Save("1", "hello", FSSaveOptions.WithPermissions(os.ModePerm))
 	require.NoError(t, err)
 
 	_, err = repo.Save("1", "world")

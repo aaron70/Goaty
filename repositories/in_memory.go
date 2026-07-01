@@ -7,6 +7,8 @@ import (
 	"github.com/aaron70/goaty/errors"
 )
 
+var _ Repository[any, any] = &InMemory[any, any]{}
+
 type InMemory[I comparable, E any] struct {
 	mu sync.Mutex
 	DB map[I]E
@@ -19,7 +21,7 @@ func NewInMemoryRepository[I comparable, E any]() (*InMemory[I, E], error) {
 	return repo, nil
 }
 
-func (r *InMemory[I, E]) Save(id I, entity E) (E, error) {
+func (r *InMemory[I, E]) Save(id I, entity E, options ...SaveOption) (E, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

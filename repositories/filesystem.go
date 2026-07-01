@@ -10,6 +10,8 @@ import (
 	"github.com/aaron70/goaty/validations"
 )
 
+var _ Repository[any, any] = &FS[any, any]{}
+
 type FS[I comparable, E any] struct {
 	FileExt   string
 	rootDir   string
@@ -67,7 +69,7 @@ func (r *FS[I, E]) fileExists(path string) (bool, error) {
 	return false, err
 }
 
-func (r *FS[I, E]) Save(id I, entity E) (E, error) {
+func (r *FS[I, E]) Save(id I, entity E, options ...SaveOption) (E, error) {
 	path := r.filePath(id)
 
 	exists, err := r.fileExists(path)
