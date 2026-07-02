@@ -4,12 +4,11 @@ import (
 	"github.com/aaron70/goaty/options"
 )
 
-type Option = options.OptionAny
 type Repository[I comparable, E any] interface {
-	Save(I, E, ...Option) (E, error)
-	Update(I, E, ...Option) (E, error)
-	Get(I, ...Option) (E, error)
-	GetAll(...Option) ([]E, error)
-	Delete(I, ...Option) (E, error)
+	Save(I, E, ...options.OptionAny) (E, error)
+	Update(I, E, ...options.OptionAny) (E, error)
+	Get(I, ...options.OptionAny) (E, error)
+	GetAll(...options.OptionAny) ([]E, error)
+	Delete(I, ...options.OptionAny) (E, error)
 }
 

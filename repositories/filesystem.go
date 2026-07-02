@@ -70,7 +70,7 @@ func (r *FS[I, E]) fileExists(path string) (bool, error) {
 	return false, err
 }
 
-func (r *FS[I, E]) Save(id I, entity E, opts ...Option) (E, error) {
+func (r *FS[I, E]) Save(id I, entity E, opts ...options.OptionAny) (E, error) {
 	var zero E
 	cfg, err := options.ApplyAnyOptions(opts, fsSaveConfig{
 		Perm: 0644,
@@ -101,7 +101,7 @@ func (r *FS[I, E]) Save(id I, entity E, opts ...Option) (E, error) {
 	return entity, nil
 }
 
-func (r *FS[I, E]) Update(id I, entity E, options ...Option) (E, error) {
+func (r *FS[I, E]) Update(id I, entity E, options ...options.OptionAny) (E, error) {
 	path := r.filePath(id)
 
 	exists, err := r.fileExists(path)
@@ -128,7 +128,7 @@ func (r *FS[I, E]) Update(id I, entity E, options ...Option) (E, error) {
 	return entity, nil
 }
 
-func (r *FS[I, E]) Get(id I, options ...Option) (E, error) {
+func (r *FS[I, E]) Get(id I, options ...options.OptionAny) (E, error) {
 	path := r.filePath(id)
 
 	data, err := os.ReadFile(path)
@@ -149,7 +149,7 @@ func (r *FS[I, E]) Get(id I, options ...Option) (E, error) {
 	return entity, nil
 }
 
-func (r *FS[I, E]) GetAll(options ...Option) ([]E, error) {
+func (r *FS[I, E]) GetAll(options ...options.OptionAny) ([]E, error) {
 	entries, err := os.ReadDir(r.rootDir)
 	if err != nil {
 		return nil, errors.NewError(nil, err, "failed to read directory")
@@ -185,7 +185,7 @@ func (r *FS[I, E]) GetAll(options ...Option) ([]E, error) {
 	return entities, nil
 }
 
-func (r *FS[I, E]) Delete(id I, options ...Option) (E, error) {
+func (r *FS[I, E]) Delete(id I, options ...options.OptionAny) (E, error) {
 	path := r.filePath(id)
 
 	entity, err := r.Get(id)
