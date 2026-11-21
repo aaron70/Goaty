@@ -1,4 +1,4 @@
-package errors
+package gerrs
 
 import (
 	"errors"
@@ -47,13 +47,13 @@ func newDevError(calldepth int, sentinel error, cause error, msg string, args ..
 
 func (e DevError) Error() string {
 	msg := strings.Builder{}
-	msg.WriteString(fmt.Sprintf("%s:%d", e.file, e.line))
+	fmt.Fprintf(&msg, "%s:%d", e.file, e.line)
 
 	chain := strings.Builder{}
 	if e.Sentinel != nil {
 		chain.WriteString(e.Sentinel.Error())
 	}
-	if !validations.StrIsBlank(e.Message) {
+	if !gvalidations.StrIsBlank(e.Message) {
 		if chain.Len() > 0 {
 			chain.WriteString(": ")
 		}
@@ -108,7 +108,7 @@ func formatStack(stack []uintptr) string {
 		msg.WriteString("\t")
 		msg.WriteString(frame.File)
 		msg.WriteString(":")
-		msg.WriteString(fmt.Sprintf("%d", frame.Line))
+		fmt.Fprintf(&msg, "%d", frame.Line)
 		msg.WriteString("\n")
 
 		if !more {

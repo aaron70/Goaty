@@ -1,4 +1,4 @@
-package utils
+package gutils
 
 func Must[T any](v T, err error) T {
 	if err != nil {

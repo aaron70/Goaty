@@ -1,11 +1,11 @@
-package options
+package gopts
 
 import "github.com/aaron70/goaty/errors"
 
 func Apply[T any, O ~func(*T) error](config *T, options ...O) error {
 	for _, option := range options {
 		if err := option(config); err != nil {
-			return errors.NewError(errors.ErrInvalidArgument, err, "")
+			return gerrs.NewError(gerrs.ErrInvalidArgument, err, "")
 		}
 	}
 	return nil

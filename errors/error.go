@@ -1,4 +1,4 @@
-package errors
+package gerrs
 
 import (
 	"errors"
@@ -37,7 +37,7 @@ func (e Error) Error() string {
 		msg.WriteString(e.Sentinel.Error())
 	}
 
-	if !validations.StrIsBlank(e.Message) {
+	if !gvalidations.StrIsBlank(e.Message) {
 		if msg.Len() != 0 {
 			msg.WriteString(": ")
 		}
