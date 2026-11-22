@@ -50,9 +50,9 @@ func TestApply(t *testing.T) {
 		{
 			Name:     "One option returns an error",
 			Config:   genericConfig{},
-			Expected: genericConfig{Values: []any{"First Value" }},
+			Expected: genericConfig{Values: []any{"First Value"}},
 			Options:  []genericOption{withValue("First Value"), withError(gerrs.New("Some Error")), withValue("Second Value"), withValue("Third Value")},
-			Err: gerrs.NewError(gerrs.ErrInvalidArgument, gerrs.New("Some Error"), ""),
+			Err:      gerrs.NewError(gerrs.ErrInvalidArgument, gerrs.New("Some Error"), ""),
 		},
 	}
 
@@ -89,9 +89,9 @@ func TestApplyEmpty(t *testing.T) {
 		},
 		{
 			Name:     "One option returns an error",
-			Expected: genericConfig{Values: []any{"First Value" }},
+			Expected: genericConfig{Values: []any{"First Value"}},
 			Options:  []genericOption{withValue("First Value"), withError(gerrs.New("Some Error")), withValue("Second Value"), withValue("Third Value")},
-			Err: gerrs.NewError(gerrs.ErrInvalidArgument, gerrs.New("Some Error"), ""),
+			Err:      gerrs.NewError(gerrs.ErrInvalidArgument, gerrs.New("Some Error"), ""),
 		},
 	}
 

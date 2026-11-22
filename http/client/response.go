@@ -2,11 +2,14 @@ package ghttpclient
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 
 	gerrs "github.com/aaron70/goaty/errors"
 	gopts "github.com/aaron70/goaty/options"
 )
+
+const maxDrainBytes = 64 << 10
 
 type HttpResponseOption[B, E any] func(*HttpResponse[B, E]) error
 
@@ -15,16 +18,17 @@ type HttpResponse[B, E any] struct {
 	body       io.ReadCloser
 
 	BodyParser func(io.Reader) (B, error)
-	ErrParser func(io.Reader) (E, error)
+	ErrParser  func(io.Reader) (E, error)
 }
 
 func NewHttpResponse[B, E any](statusCode int, body io.ReadCloser, options ...HttpResponseOption[B, E]) (*HttpResponse[B, E], error) {
 	res := &HttpResponse[B, E]{
 		StatusCode: statusCode,
-		body: body,
+		body:       body,
 	}
 	if err := gopts.Apply(res, options...); err != nil {
-		return nil, err 
+		_ = res.Close()
+		return nil, err
 	}
 	return res, nil
 }
@@ -56,13 +60,28 @@ func (r *HttpResponse[B, E]) RawBody() io.ReadCloser {
 	return r.body
 }
 
+// Close releases the underlying body. It drains a bounded amount of unread
+// data first so the connection can be reused. It is safe to call more than once.
+// Call it when the body is not consumed through Body or Error.
+func (r *HttpResponse[B, E]) Close() error {
+	if r.body == nil {
+		return nil
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(r.body, maxDrainBytes))
+	return r.body.Close()
+}
+
 func (r *HttpResponse[B, E]) Body() (B, error) {
 	var zero B
+	defer r.Close()
+
+	if r.body == nil {
+		return zero, gerrs.NewError(gerrs.ErrNilReference, nil, "Can't serialize the body, the body is nil")
+	}
 	if r.BodyParser == nil {
 		return zero, gerrs.NewError(gerrs.ErrNilReference, nil, "Can't serialize the body, the BodyParser is nil")
 	}
 
-	defer r.body.Close()
 	parsed, err := r.BodyParser(r.body)
 	if err != nil {
 		return zero, gerrs.NewError(gerrs.ErrSerilization, err, "The body couldn't be deserialzied")
@@ -73,11 +92,15 @@ func (r *HttpResponse[B, E]) Body() (B, error) {
 
 func (r *HttpResponse[B, E]) Error() (E, error) {
 	var zero E
+	defer r.Close()
+
+	if r.body == nil {
+		return zero, gerrs.NewError(gerrs.ErrNilReference, nil, "Can't serialize the error body, the body is nil")
+	}
 	if r.ErrParser == nil {
-		return zero, gerrs.NewError(gerrs.ErrNilReference, nil, "Can't serialize the body, the ErrParser is nil")
+		return zero, gerrs.NewError(gerrs.ErrNilReference, nil, "Can't serialize the error body, the ErrParser is nil")
 	}
 
-	defer r.body.Close()
 	parsed, err := r.ErrParser(r.body)
 	if err != nil {
 		return zero, gerrs.NewError(gerrs.ErrSerilization, err, "The body couldn't be deserialzied")
@@ -88,5 +111,8 @@ func (r *HttpResponse[B, E]) Error() (E, error) {
 
 func JsonParser[T any](r io.Reader) (res T, err error) {
 	err = json.NewDecoder(r).Decode(&res)
+	if errors.Is(err, io.EOF) {
+		return res, nil
+	}
 	return res, err
 }

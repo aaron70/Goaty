@@ -2,59 +2,90 @@ package ghttpclient
 
 import (
 	"context"
-	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
 
+	gerrs "github.com/aaron70/goaty/errors"
 	gopts "github.com/aaron70/goaty/options"
 )
 
+type NewClientOption func(*Client) error
+
 type Client struct {
-	BaseUrl string
+	BaseUrl    *url.URL
 	httpClient *http.Client
 }
 
-func (c *Client) Url(path string, queryParams url.Values) (string, error) {
-	fullUrl, err := url.JoinPath(c.BaseUrl, url.PathEscape(path))	
+func NewClient(base string, options ...NewClientOption) (*Client, error) {
+	baseUrl, err := url.Parse(base)
 	if err != nil {
-		return "", err
+		return nil, gerrs.NewError(gerrs.ErrInvalidArgument, err, "Invalid base url given for the client")
 	}
-	return fmt.Sprintf("%s?%s", fullUrl, queryParams.Encode()), nil
+	client := &Client{
+		BaseUrl: baseUrl,
+	}
+
+	if err := gopts.Apply(client, options...); err != nil {
+		return nil, err
+	}
+
+	if client.httpClient == nil {
+		client.httpClient = &http.Client{}
+	}
+
+	return client, nil
+}
+
+func (c *Client) Url(path string, queryParams url.Values) *url.URL {
+	u := c.BaseUrl.JoinPath(path)
+
+	q := u.Query()
+	for key, values := range queryParams {
+		q[key] = append(q[key], values...)
+	}
+	u.RawQuery = q.Encode()
+
+	return u
 }
 
 type DoRequestOption func(*DoRequest) error
 
 type DoRequest struct {
-	Body io.Reader
+	Body        io.Reader
 	QueryParams url.Values
-	Headers http.Header
+	Headers     http.Header
 }
 
-
 func (c *Client) Do[B any, E any](ctx context.Context, method, path string, options ...DoRequestOption) (*HttpResponse[B, E], error) {
-	doReq := &DoRequest{} 
+	doReq := &DoRequest{}
 	if err := gopts.Apply(doReq, options...); err != nil {
 		return nil, err
 	}
 
-	urlPath, err := c.Url(path, doReq.QueryParams)
+	u := c.Url(path, doReq.QueryParams).String()
+
+	req, err := http.NewRequestWithContext(ctx, method, u, doReq.Body)
 	if err != nil {
-		return nil, err
+		return nil, gerrs.NewError(gerrs.ErrInvalidArgument, err, "couldn't create %s request to %q", method, u)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, urlPath, doReq.Body)
-	if err != nil {
-		return nil, err
+	req.Header.Set("Accept", "application/json")
+	if doReq.Body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
-	maps.Insert(req.Header, maps.All(doReq.Headers))
+
+	for key, values := range doReq.Headers {
+		req.Header.Del(key)
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
 
 	res, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, gerrs.NewError(nil, err, "%s %s failed", method, u)
 	}
 
 	return NewJsonHttpResponse[B, E](res.StatusCode, res.Body)
 }
-

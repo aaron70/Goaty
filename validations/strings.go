@@ -9,4 +9,4 @@ func StrIsBlank(str string) bool {
 		}
 	}
 	return true
-} 
+}

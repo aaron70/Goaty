@@ -59,9 +59,9 @@ func (e *Error) Unwrap() error {
 }
 
 func (e *Error) Is(target error) bool {
-    t, ok := target.(*Error)
-    if !ok {
-        return errors.Is(e.Sentinel, target) || errors.Is(e.Cause, target)
-    }
-    return errors.Is(e.Sentinel, t.Sentinel) || errors.Is(e.Cause, t.Cause)
+	t, ok := target.(*Error)
+	if !ok {
+		return errors.Is(e.Sentinel, target) || errors.Is(e.Cause, target)
+	}
+	return errors.Is(e.Sentinel, t.Sentinel) || errors.Is(e.Cause, t.Cause)
 }
