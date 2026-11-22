@@ -9,4 +9,5 @@ var (
 	ErrInvalidArgument     error = errors.New("InvalidArgument")
 	ErrNilReference        error = errors.New("NilReference")
 	ErrConstraintViolation error = errors.New("ConstraintViolation")
+	ErrSerilization        error = errors.New("Serialization")
 )
